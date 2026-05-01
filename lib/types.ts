@@ -57,4 +57,5 @@ export interface CandidateItem {
   favicon_char: string | null;
   published_at: string | null;
   description_or_snippet: string;
+  published_at_unknown?: boolean;
 }

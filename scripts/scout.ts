@@ -133,6 +133,12 @@ async function collectWeb(anthropic: Anthropic, query: string): Promise<{ source
 Return the top 3-5 hits as a JSON array. Each entry must be:
 { "title": "...", "url": "...", "source_name": "publication or site", "snippet": "1-2 sentence summary", "published_at": "ISO 8601 if known else null" }
 
+Recency rules (important):
+- Strongly prefer items published within the last 48 hours.
+- Items older than 7 days should only be returned if they are a major story still actively developing today.
+- Always populate "published_at" when possible — this is critical for downstream filtering.
+- "published_at" must be ISO-8601 (e.g. "2026-04-30T14:00:00Z").
+
 Respond with ONLY the JSON array — no prose, no code fences.`;
 
   try {
@@ -181,6 +187,48 @@ Respond with ONLY the JSON array — no prose, no code fences.`;
   }
 }
 
+// ── Recency ──────────────────────────────────────────────────────────────────
+
+const MAX_AGE_DAYS = 7;
+
+function ageDays(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  return (Date.now() - t) / (1000 * 60 * 60 * 24);
+}
+
+function applyRecencyFilter(items: CandidateItem[]): CandidateItem[] {
+  let dropped = 0;
+  let unknown = 0;
+  const kept: CandidateItem[] = [];
+  for (const it of items) {
+    const age = ageDays(it.published_at);
+    if (age === null) {
+      unknown++;
+      kept.push({ ...it, published_at_unknown: true });
+    } else if (age > MAX_AGE_DAYS) {
+      dropped++;
+    } else {
+      kept.push(it);
+    }
+  }
+  log(`recency filter: dropped ${dropped} items older than ${MAX_AGE_DAYS} days, ${unknown} items had no date`);
+  return kept;
+}
+
+function ageLabel(item: CandidateItem): string {
+  if (item.published_at_unknown) return 'Age: unknown — be skeptical, this may be stale';
+  const age = ageDays(item.published_at);
+  if (age === null) return 'Age: unknown — be skeptical, this may be stale';
+  if (age < 1) {
+    const hours = Math.max(1, Math.round(age * 24));
+    return `Age: ${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+  const days = Math.round(age);
+  return `Age: ${days} day${days === 1 ? '' : 's'} ago`;
+}
+
 // ── Step 3: Judge ────────────────────────────────────────────────────────────
 
 async function judge(anthropic: Anthropic, item: CandidateItem): Promise<{ relevant: boolean; why_matters: string }> {
@@ -193,9 +241,15 @@ ITEM:
 - Type: ${item.type}
 - Source: ${item.source_name}
 - Title: ${item.title}
+- ${ageLabel(item)}
 - Snippet/description: ${item.description_or_snippet}
 
 Decide if this item is genuinely relevant to this channel's audience. Be discerning — most things should be rejected. If relevant, write a single sentence (editorial tone, not corporate, no hype words like "must-watch" or "essential") explaining why this specific channel's audience would care.
+
+Relevance criteria:
+- Prefer fresh items (last 48h ideal, last 7 days acceptable).
+- Be skeptical of items with unknown publication date — only mark relevant if the title clearly indicates news/launch/event from this week.
+- Evergreen roundups and "best bikes of the year" listicles should fail relevance unless they contain genuinely new information.
 
 Respond with ONLY a JSON object — no prose, no code fences:
 { "relevant": true|false, "why_matters": "one sentence" }`;
@@ -297,8 +351,12 @@ async function main() {
 
     const sourcesTouched = collected.map((c) => c.source);
     const sourcesChecked = collected.length;
-    const allCandidates = collected.flatMap((c) => c.items).slice(0, MAX_CANDIDATES);
-    log(`collected ${allCandidates.length} candidate items from ${sourcesChecked} sources`);
+    const rawCandidates = collected.flatMap((c) => c.items);
+    log(`collected ${rawCandidates.length} candidate items from ${sourcesChecked} sources`);
+
+    const fresh = applyRecencyFilter(rawCandidates);
+    const allCandidates = fresh.slice(0, MAX_CANDIDATES);
+    log(`${allCandidates.length} candidates after recency filter and cap`);
 
     if (allCandidates.length === 0) {
       await writeRun({
