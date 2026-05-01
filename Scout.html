@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scout</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg:           oklch(97% 0.008 60);
+      --bg-card:      oklch(99% 0.005 60);
+      --fg:           oklch(18% 0.010 60);
+      --fg-muted:     oklch(48% 0.012 60);
+      --fg-faint:     oklch(68% 0.010 60);
+      --accent:       oklch(52% 0.120 38);
+      --accent-light: oklch(93% 0.030 38);
+      --border:       oklch(90% 0.010 60);
+      --shadow:       0 1px 3px oklch(0% 0 0 / 0.05), 0 4px 16px oklch(0% 0 0 / 0.05);
+      --shadow-hover: 0 2px 6px oklch(0% 0 0 / 0.07), 0 8px 28px oklch(0% 0 0 / 0.09);
+      --radius:       10px;
+      --serif:        'DM Serif Display', Georgia, serif;
+      --sans:         'DM Sans', system-ui, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { font-size: 16px; }
+
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--sans);
+      line-height: 1.6;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Page shell ── */
+    .page {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 56px 24px 96px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 40px;
+    }
+
+    .header-left {}
+
+    .greeting {
+      font-family: var(--serif);
+      font-size: clamp(2rem, 5vw, 2.6rem);
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      line-height: 1.15;
+      color: var(--fg);
+    }
+
+    .date-line {
+      margin-top: 4px;
+      font-size: 0.8125rem;
+      font-weight: 300;
+      color: var(--fg-muted);
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-top: 6px;
+      flex-shrink: 0;
+    }
+
+    .btn-run {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 13px;
+      background: var(--fg);
+      color: var(--bg);
+      border: none;
+      border-radius: 999px;
+      font-family: var(--sans);
+      font-size: 0.75rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    .btn-run:hover { opacity: 0.78; transform: translateY(-1px); }
+    .btn-run:active { opacity: 1; transform: none; }
+
+    .btn-run svg { width: 11px; height: 11px; }
+
+    .btn-cog {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      background: transparent;
+      border: 1.5px solid var(--border);
+      border-radius: 50%;
+      cursor: pointer;
+      color: var(--fg-muted);
+      transition: border-color 0.15s, color 0.15s, transform 0.3s;
+    }
+    .btn-cog:hover { border-color: var(--fg-muted); color: var(--fg); transform: rotate(30deg); }
+    .btn-cog svg { width: 13px; height: 13px; }
+
+    /* ── Scout summary line ── */
+    .summary {
+      font-size: 0.875rem;
+      font-weight: 300;
+      color: var(--fg-muted);
+      margin-bottom: 36px;
+      letter-spacing: 0.005em;
+    }
+    .summary strong {
+      font-weight: 500;
+      color: var(--fg);
+    }
+
+    /* ── Divider ── */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin-bottom: 36px;
+    }
+
+    /* ── Card list ── */
+    .card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+      transition: box-shadow 0.2s, transform 0.2s;
+      cursor: default;
+    }
+    .card:hover {
+      box-shadow: var(--shadow-hover);
+      transform: translateY(-2px);
+    }
+
+    /* link-out icon */
+    .card-link {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      color: var(--fg-faint);
+      text-decoration: none;
+      transition: color 0.15s, border-color 0.15s, transform 0.15s;
+      z-index: 2;
+    }
+    .card-link:hover {
+      color: var(--fg);
+      border-color: var(--fg-muted);
+      transform: scale(1.1);
+    }
+    .card-link svg { width: 12px; height: 12px; }
+
+    /* ── YouTube card layout ── */
+    .card--youtube .card-inner {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card-thumb {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: var(--border);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .card-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* striped placeholder for thumb */
+    .card-thumb-placeholder {
+      width: 100%;
+      height: 100%;
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          oklch(90% 0.010 60) 0px,
+          oklch(90% 0.010 60) 2px,
+          oklch(94% 0.008 60) 2px,
+          oklch(94% 0.008 60) 12px
+        );
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-thumb-placeholder span {
+      font-family: monospace;
+      font-size: 0.6875rem;
+      color: var(--fg-faint);
+      letter-spacing: 0.04em;
+    }
+
+    /* YouTube play badge */
+    .yt-badge {
+      position: absolute;
+      bottom: 10px;
+      left: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: oklch(0% 0 0 / 0.65);
+      color: #fff;
+      font-family: var(--sans);
+      font-size: 0.6875rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .yt-badge svg { width: 9px; height: 9px; }
+
+    .card-body {
+      padding: 18px 44px 18px 20px; /* right padding leaves room for link icon */
+    }
+
+    /* ── Web card layout ── */
+    .card--web .card-inner {
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+    }
+
+    .card-favicon-block {
+      width: 56px;
+      flex-shrink: 0;
+      background: var(--accent-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-favicon-block .favicon-char {
+      font-family: var(--serif);
+      font-size: 1.3rem;
+      color: var(--accent);
+      user-select: none;
+    }
+
+    .card--web .card-body {
+      padding: 16px 44px 16px 18px;
+      flex: 1;
+    }
+
+    /* ── Card content elements ── */
+    .card-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+
+    .source-name {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--fg-muted);
+      letter-spacing: 0.02em;
+    }
+
+    .meta-dot {
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: var(--fg-faint);
+      flex-shrink: 0;
+    }
+
+    .time-ago {
+      font-size: 0.75rem;
+      font-weight: 300;
+      color: var(--fg-faint);
+    }
+
+    .medium-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .medium-tag--youtube {
+      background: oklch(52% 0.16 22 / 0.1);
+      color: oklch(45% 0.16 22);
+    }
+    .medium-tag--web {
+      background: oklch(52% 0.10 230 / 0.1);
+      color: oklch(42% 0.10 230);
+    }
+    .medium-tag svg { width: 8px; height: 8px; }
+
+    .card-title {
+      font-family: var(--serif);
+      font-size: 1.1rem;
+      font-weight: 400;
+      line-height: 1.3;
+      letter-spacing: -0.01em;
+      color: var(--fg);
+      margin-bottom: 12px;
+      text-wrap: pretty;
+    }
+
+    .card-why {
+      display: flex;
+      gap: 0;
+      padding-left: 14px;
+      border-left: 2.5px solid var(--accent);
+      margin-top: 10px;
+    }
+
+    .card-why p {
+      font-family: var(--serif);
+      font-style: italic;
+      font-size: 0.875rem;
+      line-height: 1.55;
+      color: var(--accent);
+      text-wrap: pretty;
+    }
+
+    /* ── Empty state ── */
+    .empty-state {
+      text-align: center;
+      padding: 64px 0 32px;
+    }
+    .empty-icon {
+      display: block;
+      margin: 0 auto 20px;
+      width: 40px;
+      height: 40px;
+      color: var(--fg-faint);
+    }
+    .empty-state h2 {
+      font-family: var(--serif);
+      font-weight: 400;
+      font-size: 1.2rem;
+      color: var(--fg);
+      margin-bottom: 8px;
+    }
+    .empty-state p {
+      font-size: 0.875rem;
+      font-weight: 300;
+      color: var(--fg-muted);
+    }
+
+    /* ── Run animation ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .running .btn-run svg { animation: spin 0.7s linear infinite; }
+
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .card {
+      animation: fadeSlideIn 0.4s ease both;
+    }
+    .card:nth-child(1) { animation-delay: 0.05s; }
+    .card:nth-child(2) { animation-delay: 0.13s; }
+    .card:nth-child(3) { animation-delay: 0.21s; }
+    .card:nth-child(4) { animation-delay: 0.29s; }
+
+    /* ── Responsive ── */
+    @media (max-width: 480px) {
+      .page { padding: 36px 16px 72px; }
+      .card--web .card-favicon-block { width: 44px; }
+    }
+  </style>
+</head>
+<body>
+
+<main class="page" id="page">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <h1 class="greeting">Morning, Ben.</h1>
+      <p class="date-line" id="date-line">Thursday, May 1, 2026</p>
+    </div>
+    <div class="header-actions" id="header-actions">
+      <button class="btn-run" id="btn-run" onclick="runNow()">
+        <!-- refresh icon -->
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="1.5 4.5 1.5 1.5 4.5 1.5"/>
+          <path d="M1.5 4.5A6.5 6.5 0 1 1 3.4 10"/>
+        </svg>
+        Run now
+      </button>
+      <button class="btn-cog" title="Settings (coming soon)" onclick="void(0)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="8" cy="8" r="2.5"/>
+          <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M2.93 2.93l1.06 1.06M12.01 12.01l1.06 1.06M2.93 13.07l1.06-1.06M12.01 3.99l1.06-1.06"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Summary line -->
+  <p class="summary" id="summary">
+    Scout checked <strong>7 sources</strong> · found <strong>4 things</strong> worth your time.
+  </p>
+
+  <div class="divider"></div>
+
+  <!-- Card list -->
+  <div class="card-list" id="card-list"></div>
+
+</main>
+
+<script>
+  // ── Data ──────────────────────────────────────────────────────────────────
+
+  const ITEMS = [
+    {
+      id: 1,
+      type: "youtube",
+      title: "Tadej Pogačar Wins Liège–Bastogne–Liège in Solo Attack — Race Recap",
+      source: "GCN Racing",
+      timeAgo: "3 hours ago",
+      thumb: "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg", // placeholder YT thumb
+      thumbAlt: "Race finish line, Pogačar solo",
+      href: "#",
+      why: "Pogačar's third Monument of the season is the kind of domination that reshapes how we talk about era-defining riders — this recap is essential viewing before anyone brings it up at work."
+    },
+    {
+      id: 2,
+      type: "youtube",
+      title: "Shimano Dura-Ace R9300 vs SRAM Red AXS: Two Years of Real-World Testing",
+      source: "DC Rainmaker",
+      timeAgo: "11 hours ago",
+      thumb: "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+      thumbAlt: "Groupset comparison on workbench",
+      href: "#",
+      why: "Unusually honest long-term verdict from someone who has genuinely ridden both — cuts through the spec-sheet marketing and gets to what breaks, wears, and surprises over a full season."
+    },
+    {
+      id: 3,
+      type: "web",
+      title: "UCI Amends Sock Height Rule, Effective August 1 — What Changes for the Peloton",
+      source: "CyclingNews",
+      timeAgo: "6 hours ago",
+      faviconChar: "C",
+      href: "#",
+      why: "A small rule tweak with surprisingly wide downstream effects: team kit suppliers and riders who've spent years gaming the old ceiling now have to rethink a detail that's become part of personal style."
+    },
+    {
+      id: 4,
+      type: "web",
+      title: "Colnago Launches V4Rs Disc — Lighter, Stiffer, and Finally Integrated Cables",
+      source: "Velo",
+      timeAgo: "9 hours ago",
+      faviconChar: "V",
+      href: "#",
+      why: "Colnago has quietly been losing ground to Pinarello and Trek at the top level; this is their clearest attempt in years to field a frame that competes on spec, not just heritage."
+    }
+  ];
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  function renderYouTubeCard(item) {
+    return `
+      <article class="card card--youtube" data-id="${item.id}">
+        <div class="card-inner">
+          <div class="card-thumb">
+            <div class="card-thumb-placeholder">
+              <span>youtube thumbnail</span>
+            </div>
+            <div class="yt-badge">
+              <svg viewBox="0 0 10 10" fill="currentColor"><polygon points="3,2 8,5 3,8"/></svg>
+              YouTube
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="source-name">${item.source}</span>
+              <span class="meta-dot"></span>
+              <span class="time-ago">${item.timeAgo}</span>
+              <span class="meta-dot"></span>
+              <span class="medium-tag medium-tag--youtube">
+                <svg viewBox="0 0 10 10" fill="currentColor"><polygon points="3,2 8,5 3,8"/></svg>
+                Video
+              </span>
+            </div>
+            <h2 class="card-title">${item.title}</h2>
+            <div class="card-why">
+              <p>${item.why}</p>
+            </div>
+          </div>
+        </div>
+        <a href="${item.href}" class="card-link" title="Open source" target="_blank" rel="noopener">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 10L10 2M5.5 2H10v4.5"/>
+          </svg>
+        </a>
+      </article>
+    `;
+  }
+
+  function renderWebCard(item) {
+    return `
+      <article class="card card--web" data-id="${item.id}">
+        <div class="card-inner">
+          <div class="card-favicon-block">
+            <span class="favicon-char">${item.faviconChar}</span>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="source-name">${item.source}</span>
+              <span class="meta-dot"></span>
+              <span class="time-ago">${item.timeAgo}</span>
+              <span class="meta-dot"></span>
+              <span class="medium-tag medium-tag--web">
+                <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="5" r="4"/><path d="M1 5h8M5 1c-1.3 1.5-2 2.8-2 4s.7 2.5 2 4M5 1c1.3 1.5 2 2.8 2 4s-.7 2.5-2 4"/></svg>
+                Web
+              </span>
+            </div>
+            <h2 class="card-title">${item.title}</h2>
+            <div class="card-why">
+              <p>${item.why}</p>
+            </div>
+          </div>
+        </div>
+        <a href="${item.href}" class="card-link" title="Open source" target="_blank" rel="noopener">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 10L10 2M5.5 2H10v4.5"/>
+          </svg>
+        </a>
+      </article>
+    `;
+  }
+
+  function renderCards(items) {
+    const list = document.getElementById("card-list");
+    if (!items.length) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <svg class="empty-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="20" cy="20" r="14"/>
+            <path d="M13 20h14M20 13v14" opacity="0.4"/>
+            <path d="M20 20m-3 0a3 3 0 1 0 6 0 3 3 0 0 0-6 0" opacity="0.3"/>
+          </svg>
+          <h2>Nothing worth your time today.</h2>
+          <p>Scout looked at 7 sources — nothing cleared the bar.</p>
+        </div>
+      `;
+      return;
+    }
+    list.innerHTML = items.map(item =>
+      item.type === "youtube" ? renderYouTubeCard(item) : renderWebCard(item)
+    ).join("");
+  }
+
+  // ── Date ──────────────────────────────────────────────────────────────────
+
+  function formatDate(d) {
+    return d.toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric"
+    });
+  }
+  document.getElementById("date-line").textContent = formatDate(new Date());
+
+  // ── Run Now ───────────────────────────────────────────────────────────────
+
+  function runNow() {
+    const actions = document.getElementById("header-actions");
+    const summary = document.getElementById("summary");
+    const list = document.getElementById("card-list");
+
+    // loading state
+    actions.classList.add("running");
+    summary.innerHTML = `Scout is checking sources&hellip;`;
+    list.innerHTML = "";
+
+    // simulate async fetch
+    setTimeout(() => {
+      actions.classList.remove("running");
+      summary.innerHTML = `Scout checked <strong>7 sources</strong> · found <strong>4 things</strong> worth your time.`;
+      renderCards(ITEMS);
+    }, 1600);
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  renderCards(ITEMS);
+</script>
+</body>
+</html>
