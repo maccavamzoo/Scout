@@ -1,0 +1,399 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:           oklch(97% 0.008 60);
+  --bg-card:      oklch(99% 0.005 60);
+  --fg:           oklch(18% 0.010 60);
+  --fg-muted:     oklch(48% 0.012 60);
+  --fg-faint:     oklch(68% 0.010 60);
+  --accent:       oklch(52% 0.120 38);
+  --accent-light: oklch(93% 0.030 38);
+  --border:       oklch(90% 0.010 60);
+  --shadow:       0 1px 3px oklch(0% 0 0 / 0.05), 0 4px 16px oklch(0% 0 0 / 0.05);
+  --shadow-hover: 0 2px 6px oklch(0% 0 0 / 0.07), 0 8px 28px oklch(0% 0 0 / 0.09);
+  --radius:       10px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 16px; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  line-height: 1.6;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Page shell ── */
+.page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 56px 24px 96px;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 40px;
+}
+
+.greeting {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: clamp(2rem, 5vw, 2.6rem);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  color: var(--fg);
+}
+
+.date-line {
+  margin-top: 4px;
+  font-size: 0.8125rem;
+  font-weight: 300;
+  color: var(--fg-muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  min-height: 1.2em;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  flex-shrink: 0;
+}
+
+.btn-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 13px;
+  background: var(--fg);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.btn-run:hover { opacity: 0.78; transform: translateY(-1px); }
+.btn-run:active { opacity: 1; transform: none; }
+.btn-run svg { width: 11px; height: 11px; }
+
+.btn-cog {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: transparent;
+  border: 1.5px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--fg-muted);
+  transition: border-color 0.15s, color 0.15s, transform 0.3s;
+}
+.btn-cog:hover { border-color: var(--fg-muted); color: var(--fg); transform: rotate(30deg); }
+.btn-cog svg { width: 13px; height: 13px; }
+
+/* ── Scout summary line ── */
+.summary {
+  font-size: 0.875rem;
+  font-weight: 300;
+  color: var(--fg-muted);
+  margin-bottom: 36px;
+  letter-spacing: 0.005em;
+}
+.summary strong {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+/* ── Divider ── */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin-bottom: 36px;
+}
+
+/* ── Card list ── */
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── Card ── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  position: relative;
+  transition: box-shadow 0.2s, transform 0.2s;
+  cursor: default;
+}
+.card:hover {
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-2px);
+}
+
+/* link-out icon */
+.card-link {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--fg-faint);
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s, transform 0.15s;
+  z-index: 2;
+}
+.card-link:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+  transform: scale(1.1);
+}
+.card-link svg { width: 12px; height: 12px; }
+
+/* ── YouTube card layout ── */
+.card--youtube .card-inner {
+  display: flex;
+  flex-direction: column;
+}
+
+.card-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.card-thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      oklch(90% 0.010 60) 0px,
+      oklch(90% 0.010 60) 2px,
+      oklch(94% 0.008 60) 2px,
+      oklch(94% 0.008 60) 12px
+    );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-thumb-placeholder span {
+  font-family: monospace;
+  font-size: 0.6875rem;
+  color: var(--fg-faint);
+  letter-spacing: 0.04em;
+}
+
+/* YouTube play badge */
+.yt-badge {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: oklch(0% 0 0 / 0.65);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.yt-badge svg { width: 9px; height: 9px; }
+
+.card-body {
+  padding: 18px 44px 18px 20px;
+}
+
+/* ── Web card layout ── */
+.card--web .card-inner {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.card-favicon-block {
+  width: 56px;
+  flex-shrink: 0;
+  background: var(--accent-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-favicon-block .favicon-char {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: 1.3rem;
+  color: var(--accent);
+  user-select: none;
+}
+
+.card--web .card-body {
+  padding: 16px 44px 16px 18px;
+  flex: 1;
+}
+
+/* ── Card content elements ── */
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.source-name {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+}
+
+.meta-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  flex-shrink: 0;
+}
+
+.time-ago {
+  font-size: 0.75rem;
+  font-weight: 300;
+  color: var(--fg-faint);
+}
+
+.medium-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.medium-tag--youtube {
+  background: oklch(52% 0.16 22 / 0.1);
+  color: oklch(45% 0.16 22);
+}
+.medium-tag--web {
+  background: oklch(52% 0.10 230 / 0.1);
+  color: oklch(42% 0.10 230);
+}
+.medium-tag svg { width: 8px; height: 8px; }
+
+.card-title {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: 1.1rem;
+  font-weight: 400;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  margin-bottom: 12px;
+  text-wrap: pretty;
+}
+
+.card-why {
+  display: flex;
+  gap: 0;
+  padding-left: 14px;
+  border-left: 2.5px solid var(--accent);
+  margin-top: 10px;
+}
+
+.card-why p {
+  font-family: var(--font-serif), Georgia, serif;
+  font-style: italic;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--accent);
+  text-wrap: pretty;
+}
+
+/* ── Empty state ── */
+.empty-state {
+  text-align: center;
+  padding: 64px 0 32px;
+}
+.empty-icon {
+  display: block;
+  margin: 0 auto 20px;
+  width: 40px;
+  height: 40px;
+  color: var(--fg-faint);
+}
+.empty-state h2 {
+  font-family: var(--font-serif), Georgia, serif;
+  font-weight: 400;
+  font-size: 1.2rem;
+  color: var(--fg);
+  margin-bottom: 8px;
+}
+.empty-state p {
+  font-size: 0.875rem;
+  font-weight: 300;
+  color: var(--fg-muted);
+}
+
+/* ── Run animation ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.running .btn-run svg { animation: spin 0.7s linear infinite; }
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.card {
+  animation: fadeSlideIn 0.4s ease both;
+}
+.card:nth-child(1) { animation-delay: 0.05s; }
+.card:nth-child(2) { animation-delay: 0.13s; }
+.card:nth-child(3) { animation-delay: 0.21s; }
+.card:nth-child(4) { animation-delay: 0.29s; }
+.card:nth-child(5) { animation-delay: 0.37s; }
+.card:nth-child(6) { animation-delay: 0.45s; }
+.card:nth-child(7) { animation-delay: 0.53s; }
+.card:nth-child(8) { animation-delay: 0.61s; }
+
+/* ── Responsive ── */
+@media (max-width: 480px) {
+  .page { padding: 36px 16px 72px; }
+  .card--web .card-favicon-block { width: 44px; }
+}
