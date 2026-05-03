@@ -8,6 +8,9 @@ export interface RunRow {
   items_found: number | null;
   scout_reasoning: string | null;
   error: string | null;
+  stage: string | null;
+  stage_detail: string | null;
+  stage_updated_at: string | null;
 }
 
 export interface ItemRow {
@@ -27,6 +30,8 @@ export interface ItemRow {
 
 export interface LatestResponse {
   status: 'done' | 'failed' | 'running' | 'pending';
+  stage: string | null;
+  stage_detail: string | null;
   ran_at: string;
   error: string | null;
   sources_checked: number | null;

@@ -9,15 +9,17 @@ export async function GET() {
   const db = sql();
 
   const runs = (await db`
-    SELECT id, ran_at, status, sources_checked, items_found, error
+    SELECT id, ran_at, status, sources_checked, items_found, error, stage, stage_detail
     FROM runs
     ORDER BY ran_at DESC
     LIMIT 1
-  `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'sources_checked' | 'items_found' | 'error'>>;
+  `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'sources_checked' | 'items_found' | 'error' | 'stage' | 'stage_detail'>>;
 
   if (runs.length === 0) {
     const empty: LatestResponse = {
       status: 'done',
+      stage: null,
+      stage_detail: null,
       ran_at: new Date().toISOString(),
       error: null,
       sources_checked: 0,
@@ -42,6 +44,8 @@ export async function GET() {
 
   const body: LatestResponse = {
     status: run.status,
+    stage: run.stage,
+    stage_detail: run.stage_detail,
     ran_at: run.ran_at,
     error: run.error,
     sources_checked: run.sources_checked,

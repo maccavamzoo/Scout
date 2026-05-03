@@ -278,24 +278,38 @@ Respond with ONLY a JSON object — no prose, no code fences:
 
 // ── Step 4: Write ────────────────────────────────────────────────────────────
 
-async function writeRun(args: {
+async function startRun(): Promise<string> {
+  const db = sql();
+  const rows = (await db`
+    INSERT INTO runs (status, stage, stage_detail, stage_updated_at)
+    VALUES ('running', 'planning', 'deciding where to look', NOW())
+    RETURNING id
+  `) as Array<{ id: string }>;
+  return rows[0].id;
+}
+
+async function setStage(runId: string, stage: string, detail: string): Promise<void> {
+  const db = sql();
+  await db`
+    UPDATE runs
+    SET stage = ${stage},
+        stage_detail = ${detail},
+        stage_updated_at = NOW()
+    WHERE id = ${runId}
+  `;
+  log(`stage: ${stage} — ${detail}`);
+}
+
+async function writeItemsAndFinalise(args: {
+  runId: string;
   reasoning: string;
   sourcesChecked: number;
   surviving: Array<CandidateItem & { why_matters: string }>;
   sourcesTouched: string[];
 }): Promise<void> {
   const db = sql();
-  const { reasoning, sourcesChecked, surviving, sourcesTouched } = args;
+  const { runId, reasoning, sourcesChecked, surviving, sourcesTouched } = args;
 
-  // Insert run
-  const runRows = await db`
-    INSERT INTO runs (status, sources_checked, items_found, scout_reasoning)
-    VALUES ('done', ${sourcesChecked}, ${surviving.length}, ${reasoning})
-    RETURNING id
-  ` as Array<{ id: string }>;
-  const runId = runRows[0].id;
-
-  // Insert items in parallel
   await Promise.all(
     surviving.map((it, idx) => db`
       INSERT INTO items (
@@ -305,27 +319,50 @@ async function writeRun(args: {
         ${runId}, ${it.type}, ${it.title}, ${it.source_name}, ${it.source_url},
         ${it.thumbnail_url}, ${it.favicon_char}, ${it.published_at}, ${it.why_matters}, ${idx}
       )
-    `)
+    `),
   );
 
-  // Upsert memory for each touched source
   await Promise.all(
     sourcesTouched.map((src) => db`
       INSERT INTO scout_memory (source, last_checked)
       VALUES (${src}, NOW())
-    `)
+    `),
   );
+
+  await db`
+    UPDATE runs
+    SET status = 'done',
+        sources_checked = ${sourcesChecked},
+        items_found = ${surviving.length},
+        scout_reasoning = ${reasoning},
+        stage = NULL,
+        stage_detail = NULL,
+        stage_updated_at = NOW()
+    WHERE id = ${runId}
+  `;
 
   log(`wrote run ${runId} with ${surviving.length} items`);
 }
 
-async function writeFailure(message: string): Promise<void> {
+async function markFailed(runId: string | null, message: string): Promise<void> {
   try {
     const db = sql();
-    await db`
-      INSERT INTO runs (status, error)
-      VALUES ('failed', ${message})
-    `;
+    if (runId) {
+      await db`
+        UPDATE runs
+        SET status = 'failed',
+            error = ${message},
+            stage = NULL,
+            stage_detail = NULL,
+            stage_updated_at = NOW()
+        WHERE id = ${runId}
+      `;
+    } else {
+      await db`
+        INSERT INTO runs (status, error)
+        VALUES ('failed', ${message})
+      `;
+    }
   } catch (err) {
     log('failed to write failure row:', err);
   }
@@ -334,7 +371,9 @@ async function writeFailure(message: string): Promise<void> {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
+  let runId: string | null = null;
   try {
+    runId = await startRun();
     const anthropic = client();
 
     log('planning...');
@@ -343,7 +382,9 @@ async function main() {
     log('youtube picks:', manifest.youtube_channels.map((c) => c.handle_or_query));
     log('web searches:', manifest.web_searches.map((s) => s.query));
 
-    log('collecting...');
+    const pickedSources = manifest.youtube_channels.length + manifest.web_searches.length;
+    await setStage(runId, 'collecting', `checking ${pickedSources} source${pickedSources === 1 ? '' : 's'}`);
+
     const collected = await Promise.all([
       ...manifest.youtube_channels.map((c) => collectYouTube(c.handle_or_query)),
       ...manifest.web_searches.map((s) => collectWeb(anthropic, s.query)),
@@ -358,18 +399,11 @@ async function main() {
     const allCandidates = fresh.slice(0, MAX_CANDIDATES);
     log(`${allCandidates.length} candidates after recency filter and cap`);
 
-    if (allCandidates.length === 0) {
-      await writeRun({
-        reasoning: manifest.reasoning,
-        sourcesChecked,
-        surviving: [],
-        sourcesTouched,
-      });
-      return;
-    }
+    await setStage(runId, 'judging', `judging ${allCandidates.length} item${allCandidates.length === 1 ? '' : 's'}`);
 
-    log('judging...');
-    const judgments = await Promise.all(allCandidates.map((it) => judge(anthropic, it)));
+    const judgments = allCandidates.length
+      ? await Promise.all(allCandidates.map((it) => judge(anthropic, it)))
+      : [];
 
     const surviving = allCandidates
       .map((it, i) => ({ ...it, ...judgments[i] }))
@@ -378,7 +412,10 @@ async function main() {
 
     log(`${surviving.length} items survived judging`);
 
-    await writeRun({
+    await setStage(runId, 'writing', `saving ${surviving.length} item${surviving.length === 1 ? '' : 's'}`);
+
+    await writeItemsAndFinalise({
+      runId,
       reasoning: manifest.reasoning,
       sourcesChecked,
       surviving,
@@ -387,7 +424,7 @@ async function main() {
   } catch (err) {
     const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
     log('FAILED:', msg);
-    await writeFailure(msg);
+    await markFailed(runId, msg);
     process.exitCode = 1;
   }
 }

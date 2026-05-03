@@ -37,3 +37,8 @@ CREATE INDEX idx_runs_ran_at ON runs(ran_at DESC);
 CREATE INDEX idx_runs_status ON runs(status);
 CREATE INDEX idx_memory_source ON scout_memory(source);
 CREATE INDEX idx_memory_checked ON scout_memory(last_checked DESC);
+
+-- ── Patch 03: live progress ──────────────────────────────────────────────────
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage_detail TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage_updated_at TIMESTAMPTZ;

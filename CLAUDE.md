@@ -16,7 +16,7 @@ The page (`app/page.tsx`) fetches the latest `status='done'` run from Neon and r
 ## File map
 
 - `scripts/scout.ts` — the agent
-- `app/page.tsx`, `app/Header.tsx` — the morning page
+- `app/page.tsx`, `app/Shell.tsx` — the morning page (server fetches initial data, client polls while running)
 - `app/api/latest/route.ts` — latest done run + items
 - `app/api/run/route.ts` — workflow_dispatch trigger
 - `lib/db.ts`, `lib/youtube.ts`, `lib/types.ts`
