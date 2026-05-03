@@ -1,5 +1,5 @@
 import { sql } from '@/lib/db';
-import type { ItemRow, LatestResponse, RunRow } from '@/lib/types';
+import type { ItemType, LatestItem, LatestResponse, Rating, RunRow } from '@/lib/types';
 import { Shell } from './Shell';
 
 export const dynamic = 'force-dynamic';
@@ -31,15 +31,27 @@ async function getLatest(): Promise<LatestResponse> {
   }
 
   const run = runs[0];
-  const items =
+  const items: LatestItem[] =
     run.status === 'done'
       ? ((await db`
-          SELECT id, type, title, source_name, source_url, thumbnail_url,
-                 favicon_char, published_at, why_matters
-          FROM items
-          WHERE run_id = ${run.id}
-          ORDER BY display_order ASC
-        `) as ItemRow[])
+          SELECT i.id, i.type, i.title, i.source_name, i.source_url, i.thumbnail_url,
+                 i.favicon_char, i.published_at, i.why_matters, r.rating
+          FROM items i
+          LEFT JOIN ratings r ON r.item_id = i.id
+          WHERE i.run_id = ${run.id}
+          ORDER BY i.display_order ASC
+        `) as Array<{
+          id: string;
+          type: ItemType;
+          title: string;
+          source_name: string;
+          source_url: string;
+          thumbnail_url: string | null;
+          favicon_char: string | null;
+          published_at: string | null;
+          why_matters: string;
+          rating: Rating | null;
+        }>)
       : [];
 
   return {
@@ -50,17 +62,7 @@ async function getLatest(): Promise<LatestResponse> {
     error: run.error,
     sources_checked: run.sources_checked,
     items_found: run.items_found,
-    items: items.map((it) => ({
-      id: it.id,
-      type: it.type,
-      title: it.title,
-      source_name: it.source_name,
-      source_url: it.source_url,
-      thumbnail_url: it.thumbnail_url,
-      favicon_char: it.favicon_char,
-      published_at: it.published_at,
-      why_matters: it.why_matters,
-    })),
+    items,
   };
 }
 

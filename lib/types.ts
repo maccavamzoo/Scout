@@ -1,4 +1,5 @@
 export type ItemType = 'youtube' | 'web';
+export type Rating = 'up' | 'down';
 
 export interface RunRow {
   id: string;
@@ -28,6 +29,19 @@ export interface ItemRow {
   created_at: string;
 }
 
+export interface LatestItem {
+  id: string;
+  type: ItemType;
+  title: string;
+  source_name: string;
+  source_url: string;
+  thumbnail_url: string | null;
+  favicon_char: string | null;
+  published_at: string | null;
+  why_matters: string;
+  rating: Rating | null;
+}
+
 export interface LatestResponse {
   status: 'done' | 'failed' | 'running' | 'pending';
   stage: string | null;
@@ -36,33 +50,19 @@ export interface LatestResponse {
   error: string | null;
   sources_checked: number | null;
   items_found: number | null;
+  items: LatestItem[];
+}
+
+// What the agent writes to /mnt/session/outputs/results.json.
+export interface AgentResults {
+  reasoning: string;
   items: Array<{
-    id: string;
     type: ItemType;
     title: string;
     source_name: string;
     source_url: string;
-    thumbnail_url: string | null;
-    favicon_char: string | null;
-    published_at: string | null;
+    thumbnail_url?: string | null;
+    published_at?: string | null;
     why_matters: string;
   }>;
-}
-
-export interface PlanManifest {
-  reasoning: string;
-  youtube_channels: Array<{ handle_or_query: string; why: string }>;
-  web_searches: Array<{ query: string; why: string }>;
-}
-
-export interface CandidateItem {
-  type: ItemType;
-  title: string;
-  source_name: string;
-  source_url: string;
-  thumbnail_url: string | null;
-  favicon_char: string | null;
-  published_at: string | null;
-  description_or_snippet: string;
-  published_at_unknown?: boolean;
 }

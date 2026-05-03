@@ -7,7 +7,7 @@ on:
 jobs:
   scout:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,6 +17,7 @@ jobs:
       - name: Run Scout
         run: npx tsx scripts/scout.ts
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          YOUTUBE_API_KEY:   ${{ secrets.YOUTUBE_API_KEY }}
-          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY:     ${{ secrets.ANTHROPIC_API_KEY }}
+          DATABASE_URL:          ${{ secrets.DATABASE_URL }}
+          SCOUT_AGENT_ID:        ${{ secrets.SCOUT_AGENT_ID }}
+          SCOUT_ENVIRONMENT_ID:  ${{ secrets.SCOUT_ENVIRONMENT_ID }}

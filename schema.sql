@@ -42,3 +42,14 @@ CREATE INDEX idx_memory_checked ON scout_memory(last_checked DESC);
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage TEXT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage_detail TEXT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage_updated_at TIMESTAMPTZ;
+
+-- ── v2: ratings (one rating per item, latest click wins) ─────────────────────
+CREATE TABLE ratings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  rating TEXT NOT NULL CHECK (rating IN ('up', 'down')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_ratings_item ON ratings(item_id);
+CREATE INDEX idx_ratings_created ON ratings(created_at DESC);

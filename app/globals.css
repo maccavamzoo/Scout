@@ -186,6 +186,47 @@ body {
 }
 .card-link svg { width: 12px; height: 12px; }
 
+/* ── Thumb buttons (rating) ── */
+.card-thumbs {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: inline-flex;
+  gap: 6px;
+  z-index: 2;
+}
+.thumb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--fg-faint);
+  padding: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.thumb-btn svg { width: 13px; height: 13px; }
+.thumb-btn:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+  transform: scale(1.06);
+}
+.thumb-btn.is-active {
+  border-color: transparent;
+}
+.thumb-btn.is-up {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+.thumb-btn.is-down {
+  background: var(--coral-light);
+  color: var(--coral);
+}
+
 /* ── YouTube card layout ── */
 .card--youtube .card-inner {
   display: flex;
@@ -249,7 +290,7 @@ body {
 .yt-badge svg { width: 9px; height: 9px; }
 
 .card-body {
-  padding: 18px 44px 18px 20px;
+  padding: 18px 44px 48px 20px;
 }
 
 /* ── Web card layout ── */
@@ -275,7 +316,7 @@ body {
 }
 
 .card--web .card-body {
-  padding: 16px 44px 16px 18px;
+  padding: 16px 44px 46px 18px;
   flex: 1;
 }
 

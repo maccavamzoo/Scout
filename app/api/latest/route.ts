@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
-import type { LatestResponse, ItemRow, RunRow } from '@/lib/types';
+import type { LatestResponse, RunRow, ItemType, Rating } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -13,7 +13,9 @@ export async function GET() {
     FROM runs
     ORDER BY ran_at DESC
     LIMIT 1
-  `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'sources_checked' | 'items_found' | 'error' | 'stage' | 'stage_detail'>>;
+  `) as Array<
+    Pick<RunRow, 'id' | 'ran_at' | 'status' | 'sources_checked' | 'items_found' | 'error' | 'stage' | 'stage_detail'>
+  >;
 
   if (runs.length === 0) {
     const empty: LatestResponse = {
@@ -34,12 +36,24 @@ export async function GET() {
   const items =
     run.status === 'done'
       ? ((await db`
-          SELECT id, type, title, source_name, source_url, thumbnail_url,
-                 favicon_char, published_at, why_matters
-          FROM items
-          WHERE run_id = ${run.id}
-          ORDER BY display_order ASC
-        `) as ItemRow[])
+          SELECT i.id, i.type, i.title, i.source_name, i.source_url, i.thumbnail_url,
+                 i.favicon_char, i.published_at, i.why_matters, r.rating
+          FROM items i
+          LEFT JOIN ratings r ON r.item_id = i.id
+          WHERE i.run_id = ${run.id}
+          ORDER BY i.display_order ASC
+        `) as Array<{
+          id: string;
+          type: ItemType;
+          title: string;
+          source_name: string;
+          source_url: string;
+          thumbnail_url: string | null;
+          favicon_char: string | null;
+          published_at: string | null;
+          why_matters: string;
+          rating: Rating | null;
+        }>)
       : [];
 
   const body: LatestResponse = {
@@ -50,17 +64,7 @@ export async function GET() {
     error: run.error,
     sources_checked: run.sources_checked,
     items_found: run.items_found,
-    items: items.map((it) => ({
-      id: it.id,
-      type: it.type,
-      title: it.title,
-      source_name: it.source_name,
-      source_url: it.source_url,
-      thumbnail_url: it.thumbnail_url,
-      favicon_char: it.favicon_char,
-      published_at: it.published_at,
-      why_matters: it.why_matters,
-    })),
+    items,
   };
 
   return NextResponse.json(body);

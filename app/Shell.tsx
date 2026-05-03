@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import type { LatestResponse } from '@/lib/types';
+import type { LatestItem, LatestResponse, Rating } from '@/lib/types';
 
 function timeAgo(iso: string | null): string {
   if (!iso) return '';
@@ -45,13 +45,13 @@ function formatLastScanned(iso: string): string {
 function stageLine(stage: string | null, detail: string | null): string {
   switch (stage) {
     case 'planning':
-      return 'Deciding where to look today…';
+      return detail
+        ? `${detail.charAt(0).toUpperCase()}${detail.slice(1)}…`
+        : 'Deciding where to look today…';
     case 'collecting':
       return detail ? `${detail.charAt(0).toUpperCase()}${detail.slice(1)}…` : 'Checking sources…';
-    case 'judging':
-      return detail ? `${detail.charAt(0).toUpperCase()}${detail.slice(1)}…` : 'Judging items…';
     case 'writing':
-      return 'Saving the keepers…';
+      return detail ? `${detail.charAt(0).toUpperCase()}${detail.slice(1)}…` : 'Saving the keepers…';
     default:
       return 'Just getting started…';
   }
@@ -67,7 +67,55 @@ function LinkOut({ href }: { href: string }) {
   );
 }
 
-function YouTubeCard({ item }: { item: LatestResponse['items'][number] }) {
+function ThumbsIcon({ down, filled }: { down?: boolean; filled?: boolean }) {
+  // Simple thumbs-up SVG; flipped vertically for thumbs-down.
+  const path =
+    'M3 8.5h2v6H3a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1Zm4 0V5.7c0-.9.7-1.7 1.7-1.7.4 0 .7.3.7.7l-.4 2.3v1.5h3.7c.7 0 1.3.6 1.3 1.3l-.9 4c-.1.5-.6.9-1.2.9H7v-6Z';
+  return (
+    <svg viewBox="0 0 16 16" style={{ transform: down ? 'scaleY(-1)' : undefined }} aria-hidden="true">
+      <path d={path} fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.4} strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ThumbButtons({
+  rating,
+  onRate,
+}: {
+  rating: Rating | null;
+  onRate: (rating: Rating) => void;
+}) {
+  return (
+    <div className="card-thumbs" role="group" aria-label="Rate this item">
+      <button
+        type="button"
+        className={`thumb-btn${rating === 'up' ? ' is-active is-up' : ''}`}
+        title="Thumbs up"
+        aria-pressed={rating === 'up'}
+        onClick={() => onRate('up')}
+      >
+        <ThumbsIcon filled={rating === 'up'} />
+      </button>
+      <button
+        type="button"
+        className={`thumb-btn${rating === 'down' ? ' is-active is-down' : ''}`}
+        title="Thumbs down"
+        aria-pressed={rating === 'down'}
+        onClick={() => onRate('down')}
+      >
+        <ThumbsIcon down filled={rating === 'down'} />
+      </button>
+    </div>
+  );
+}
+
+function YouTubeCard({
+  item,
+  onRate,
+}: {
+  item: LatestItem;
+  onRate: (rating: Rating) => void;
+}) {
   return (
     <article className="card card--youtube">
       <div className="card-inner">
@@ -101,11 +149,18 @@ function YouTubeCard({ item }: { item: LatestResponse['items'][number] }) {
         </div>
       </div>
       <LinkOut href={item.source_url} />
+      <ThumbButtons rating={item.rating} onRate={onRate} />
     </article>
   );
 }
 
-function WebCard({ item }: { item: LatestResponse['items'][number] }) {
+function WebCard({
+  item,
+  onRate,
+}: {
+  item: LatestItem;
+  onRate: (rating: Rating) => void;
+}) {
   const ch = item.favicon_char ?? (item.source_name?.[0] ?? '?').toUpperCase();
   return (
     <article className="card card--web">
@@ -132,6 +187,7 @@ function WebCard({ item }: { item: LatestResponse['items'][number] }) {
         </div>
       </div>
       <LinkOut href={item.source_url} />
+      <ThumbButtons rating={item.rating} onRate={onRate} />
     </article>
   );
 }
@@ -145,7 +201,11 @@ function EmptyState({ sourcesChecked }: { sourcesChecked: number }) {
         <path d="M20 20m-3 0a3 3 0 1 0 6 0 3 3 0 0 0-6 0" opacity="0.3" />
       </svg>
       <h2>Nothing worth your time today.</h2>
-      <p>Scout looked at {sourcesChecked} source{sourcesChecked === 1 ? '' : 's'} — nothing cleared the bar.</p>
+      <p>
+        Scout looked but nothing cleared the bar
+        {sourcesChecked > 0 ? ` (across ${sourcesChecked} source${sourcesChecked === 1 ? '' : 's'})` : ''}
+        .
+      </p>
     </div>
   );
 }
@@ -215,7 +275,6 @@ export function Shell({ initial }: { initial: LatestResponse }) {
     if (running) return;
     setRunning(true);
     setMessage(null);
-    // Optimistic: flip to pending immediately so the UI reacts before the next poll.
     setData((prev) => ({
       ...prev,
       status: 'pending',
@@ -236,7 +295,22 @@ export function Shell({ initial }: { initial: LatestResponse }) {
     }
   }, [running]);
 
-  const showSummary = data.status === 'done';
+  const rateItem = useCallback((itemId: string, rating: Rating) => {
+    // Optimistic — flip the UI immediately, then POST.
+    setData((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => (it.id === itemId ? { ...it, rating } : it)),
+    }));
+    fetch('/api/rate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ item_id: itemId, rating }),
+    }).catch(() => {
+      // Network failure — silently ignore. Page reload will reconcile.
+    });
+  }, []);
+
+  const showSummary = data.status === 'done' && data.items.length > 0;
 
   return (
     <main className="page">
@@ -269,9 +343,8 @@ export function Shell({ initial }: { initial: LatestResponse }) {
 
       {showSummary && (
         <p className="summary">
-          Scout checked <strong>{data.sources_checked ?? 0} source{(data.sources_checked ?? 0) === 1 ? '' : 's'}</strong>
-          {' · '}
-          found <strong>{data.items_found ?? 0} thing{(data.items_found ?? 0) === 1 ? '' : 's'}</strong> worth your time.
+          Scout found <strong>{data.items_found ?? data.items.length} thing{(data.items_found ?? data.items.length) === 1 ? '' : 's'}</strong>{' '}
+          worth your time today.
         </p>
       )}
 
@@ -287,9 +360,9 @@ export function Shell({ initial }: { initial: LatestResponse }) {
         <div className="card-list">
           {data.items.map((item) =>
             item.type === 'youtube' ? (
-              <YouTubeCard key={item.id} item={item} />
+              <YouTubeCard key={item.id} item={item} onRate={(r) => rateItem(item.id, r)} />
             ) : (
-              <WebCard key={item.id} item={item} />
+              <WebCard key={item.id} item={item} onRate={(r) => rateItem(item.id, r)} />
             ),
           )}
         </div>

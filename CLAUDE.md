@@ -1,46 +1,54 @@
 # Scout
 
-A personal cycling-news agent for Ben.
+A personal cycling-news agent for Ben (Bikotic).
 
-## Project overview
+## Project overview (v2 — Managed Agents)
 
-Scout is a Next.js 14 app on Vercel backed by Neon Postgres. A daily GitHub Actions cron runs `scripts/scout.ts`:
+Scout is a Next.js 14 app on Vercel, backed by Neon Postgres, driven by an autonomous agent running on Anthropic's Managed Agents infrastructure.
 
-1. **Plan** — Opus 4.7 reads the channel profile and 7-day memory of recent sources, returns a JSON manifest of YouTube channels + web searches to check today.
-2. **Collect** — YouTube uploads (last 24h via Data API v3) and Anthropic web searches run in parallel.
-3. **Judge** — Haiku 4.5 scores each candidate for relevance and writes a one-sentence "why this matters."
-4. **Write** — surviving items go to `items`, run summary to `runs`, sources upserted into `scout_memory`.
+A daily GitHub Actions cron (06:00 UTC) runs `scripts/scout.ts`, which:
 
-The page (`app/page.tsx`) fetches the latest `status='done'` run from Neon and renders the editorial card list (two variants: YouTube with thumbnail, Web with favicon block). "Run now" POSTs to `/api/run`, which triggers `workflow_dispatch` on the Scout workflow.
+1. Reads the last 14 days of Ben's ratings from Neon and the date of the last successful run.
+2. Opens a session against the pre-created Scout agent + environment, mounting the persistent memory store at `/mnt/memory/scout-memory/`.
+3. Sends today's user message (date + ratings + a one-line brief).
+4. Streams events back, mapping `agent.tool_use` events to live stage updates in the `runs` table for the page's progress UI.
+5. Downloads `/mnt/session/outputs/results.json` via `files.list({scope_id})`, parses it, writes items + finalises the run row.
+
+The agent itself decides where to look, what to fetch, what's relevant, and what's worth surfacing. There is no source list, no recency filter, no judging step in code — those concerns all live on the agent, in the system prompt at `scripts/setup-agent.ts`.
+
+The page (`app/page.tsx` + `app/Shell.tsx`) reads the latest run from Neon, polls `/api/latest` while the agent is running, and renders cards with thumbs-up/thumbs-down buttons. Each rating round-trips through `/api/rate` and feeds the next run's user message.
 
 ## File map
 
-- `scripts/scout.ts` — the agent
-- `app/page.tsx`, `app/Shell.tsx` — the morning page (server fetches initial data, client polls while running)
-- `app/api/latest/route.ts` — latest done run + items
+- `scripts/setup-agent.ts` — find-or-create the agent, environment, and memory store. Canonical home of the system prompt. Re-run when the prompt or tool config changes.
+- `scripts/scout.ts` — the orchestrator. ~200 lines. No agent intelligence — only glue.
+- `app/page.tsx`, `app/Shell.tsx` — the morning page (server fetches initial data, client polls + rates)
+- `app/api/latest/route.ts` — latest run + items, with rating join
 - `app/api/run/route.ts` — workflow_dispatch trigger
-- `lib/db.ts`, `lib/youtube.ts`, `lib/types.ts`
-- `config/channel.ts` — channel profile (fill in)
-- `schema.sql` — manual Neon migration
+- `app/api/rate/route.ts` — POST a thumbs up/down (upsert; one rating per item)
+- `lib/db.ts`, `lib/types.ts`
+- `schema.sql` — manual Neon migration (includes patch 03 stage cols + v2 ratings table)
 - `.github/workflows/scout.yml` — daily cron + manual dispatch
 - `CLUES.md` — conventions
 - `README.md` — setup steps
-- `Scout.html` — original visual reference (kept for posterity)
-- `SCOUT_BUILD_PROMPT.md` — the original build spec
+- `Scout.html` — original visual reference
+- `SCOUT_BUILD_PROMPT.md` — original v1 build spec
 
 ## Conventions
 
 - TypeScript / Next.js 14 App Router / Tailwind / Neon Postgres
 - `legacy-peer-deps=true` in `.npmrc`
-- Anthropic SDK is instantiated **inside** route handlers and the scout script only. Never at module top-level.
+- Anthropic SDK is instantiated **inside** route handlers and the scout/setup scripts only. Never at module top-level.
 - No date libraries — native `Intl` and `Date` only.
-- Migrations are manual SQL via Neon's SQL editor. `schema.sql` is the source of truth; do not run from code.
+- Migrations are manual SQL via Neon's SQL editor. `schema.sql` is the source of truth.
 - All parallel work uses `Promise.all`.
 - `window.location.href` for post-action navigation, not `router.push`.
-- Models: `claude-opus-4-7` (planner), `claude-haiku-4-5-20251001` (judge).
-- Anthropic web search via the `web_search_20250305` tool. No third-party search API.
-- Scout caps: 5 YouTube channels, 3 web searches, 30 items judged, 8 items surfaced.
+- Model: `claude-opus-4-7` (the agent's default, set in `setup-agent.ts`).
+- Cross-session memory: a single workspace-scoped Memory Store named `scout-memory`, mounted at `/mnt/memory/scout-memory/` in the session container. The store ID is stored in `agent.metadata.scout_memory_store_id` so the runner doesn't need a third secret.
+- Agent output: the agent writes `/mnt/session/outputs/results.json`; the orchestrator downloads it via `files.list({scope_id: session.id})`.
+- Ratings: one row per item, latest click wins (UNIQUE index on `item_id`, ON CONFLICT DO UPDATE).
+- `scripts/scout.ts` is glue, not pipeline. If you find yourself adding logic about sources, freshness, or relevance there — stop. That belongs in the system prompt.
 
 ## Working style
 
-Direct and decisive. No "you may want to…", no fallback handling for cases the spec rules out. If something's silent, make a sensible call and document it briefly.
+Direct and decisive. No "you may want to…", no fallback handling for cases the spec rules out.
