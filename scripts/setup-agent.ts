@@ -80,7 +80,11 @@ Target 4–8 items. Quality over quantity. If the day genuinely has nothing wort
 
 # Tone for "why_matters"
 
-Plain-spoken and direct. Dry British undertones welcome. One sentence, editorial, never corporate. Lead with what is actually new or interesting — strip marketing language. If something is hyped but unremarkable, say so.`;
+Plain-spoken and direct. Dry British undertones welcome. One sentence, editorial, never corporate. Lead with what is actually new or interesting — strip marketing language. If something is hyped but unremarkable, say so.
+
+# Pacing
+
+Pace your tool calls. Many parallel searches in quick succession can trip rate limits. Search, read the result properly, then decide the next step — don't fire ten searches before reading any of them. Quality of reasoning over speed of execution.`;
 
 const MEMORY_STORE_DESCRIPTION =
   'Scout\'s persistent notebook across daily runs. Patterns in Ben\'s ratings, productive vs quiet sources, recent findings (so we don\'t repeat ourselves within ~14 days), and any heuristics learned from the rating signal.';

@@ -258,7 +258,7 @@ async function main() {
     const userMessage = buildUserMessage(ratings, lastRunDate);
 
     // Stream-first: open the stream before sending the kickoff.
-    const stream = await client.beta.sessions.events.stream(session.id);
+    let stream = await client.beta.sessions.events.stream(session.id);
 
     await client.beta.sessions.events.send(session.id, {
       events: [
@@ -266,28 +266,57 @@ async function main() {
       ],
     } as any);
 
-    for await (const ev of stream as any) {
-      const t = ev.type as string;
-      log(t);
+    let rateLimitRetries = 0;
+    const MAX_RATE_LIMIT_RETRIES = 3;
+    const RATE_LIMIT_WAIT_MS = 90_000;
+    let lastDetail = 'briefing the agent';
 
-      if (t === 'agent.tool_use') {
-        const mapped = describeToolUse(ev);
-        if (mapped && (mapped.stage !== stageNow || mapped.detail)) {
-          stageNow = mapped.stage;
-          await setStage(runId, mapped.stage, mapped.detail);
+    streamLoop: while (true) {
+      for await (const ev of stream as any) {
+        const t = ev.type as string;
+        log(t);
+
+        if (t === 'agent.tool_use') {
+          const mapped = describeToolUse(ev);
+          if (mapped && (mapped.stage !== stageNow || mapped.detail)) {
+            stageNow = mapped.stage;
+            lastDetail = mapped.detail;
+            await setStage(runId, mapped.stage, mapped.detail);
+          }
+        }
+
+        if (t === 'session.error') {
+          const errMsg: string = ev.error?.message ?? '';
+          const errType: string = ev.error?.type ?? '';
+          const isRateLimit =
+            /rate.?limit/i.test(errMsg) || /rate.?limit/i.test(errType);
+
+          if (isRateLimit && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+            rateLimitRetries++;
+            log(
+              `hit rate limit, waiting ${RATE_LIMIT_WAIT_MS / 1000}s before resuming (retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`,
+            );
+            await setStage(runId, 'waiting', 'hit rate limit, waiting to resume');
+            await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_MS));
+            await setStage(runId, stageNow, lastDetail);
+            stream = await client.beta.sessions.events.stream(session.id);
+            continue streamLoop;
+          }
+
+          throw new Error(
+            `session.error: ${errMsg || errType || JSON.stringify(ev.error ?? ev)}`,
+          );
+        }
+
+        if (t === 'session.status_terminated') break streamLoop;
+        if (t === 'session.status_idle') {
+          const stopType = ev.stop_reason?.type;
+          if (stopType === 'requires_action') continue; // we have no custom tools, so this shouldn't happen
+          break streamLoop; // end_turn or retries_exhausted
         }
       }
-
-      if (t === 'session.error') {
-        throw new Error(`session.error: ${ev.error?.message ?? JSON.stringify(ev.error ?? ev)}`);
-      }
-
-      if (t === 'session.status_terminated') break;
-      if (t === 'session.status_idle') {
-        const stopType = ev.stop_reason?.type;
-        if (stopType === 'requires_action') continue; // waiting on us — but we have no custom tools, so this shouldn't happen
-        break; // end_turn or retries_exhausted
-      }
+      // for-await exited without an explicit break — stream closed unexpectedly.
+      break streamLoop;
     }
 
     await setStage(runId, 'writing', 'reading the agent\'s findings');
