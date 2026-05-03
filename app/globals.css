@@ -14,6 +14,9 @@
   --shadow:       0 1px 3px oklch(0% 0 0 / 0.05), 0 4px 16px oklch(0% 0 0 / 0.05);
   --shadow-hover: 0 2px 6px oklch(0% 0 0 / 0.07), 0 8px 28px oklch(0% 0 0 / 0.09);
   --radius:       10px;
+  --coral:        oklch(56% 0.155 25);
+  --coral-light:  oklch(95% 0.030 25);
+  --coral-border: oklch(85% 0.060 25);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -61,6 +64,14 @@ body {
   letter-spacing: 0.03em;
   text-transform: uppercase;
   min-height: 1.2em;
+}
+
+.last-scanned {
+  margin-top: 2px;
+  font-size: 0.75rem;
+  font-weight: 300;
+  color: var(--fg-faint);
+  letter-spacing: 0.02em;
 }
 
 .header-actions {
@@ -346,6 +357,50 @@ body {
   color: var(--accent);
   text-wrap: pretty;
 }
+
+/* ── Status banners (failure / running) ── */
+.status-banner {
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
+  animation: fadeSlideIn 0.4s ease both;
+}
+.status-banner h2 {
+  font-family: var(--font-serif), Georgia, serif;
+  font-weight: 400;
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+}
+.status-banner-body {
+  font-family: var(--font-serif), Georgia, serif;
+  font-style: italic;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.status-banner-foot {
+  margin-top: 12px;
+  font-size: 0.8125rem;
+  font-weight: 300;
+  color: var(--fg-muted);
+}
+.status-banner-foot strong {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.status-banner--failed {
+  border-color: var(--coral-border);
+  background: var(--coral-light);
+}
+.status-banner--failed h2 { color: var(--coral); }
+.status-banner--failed .status-banner-body { color: var(--coral); }
+
+.status-banner--running h2 { color: var(--fg); }
+.status-banner--running .status-banner-body { color: var(--fg-muted); font-style: italic; }
 
 /* ── Empty state ── */
 .empty-state {

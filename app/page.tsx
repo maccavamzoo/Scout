@@ -1,5 +1,5 @@
 import { sql } from '@/lib/db';
-import type { ItemRow, LatestResponse } from '@/lib/types';
+import type { ItemRow, LatestResponse, RunRow } from '@/lib/types';
 import { HeaderClient } from './Header';
 
 export const dynamic = 'force-dynamic';
@@ -9,16 +9,17 @@ async function getLatest(): Promise<LatestResponse> {
   const db = sql();
 
   const runs = (await db`
-    SELECT id, ran_at, sources_checked, items_found
+    SELECT id, ran_at, status, sources_checked, items_found, error
     FROM runs
-    WHERE status = 'done'
     ORDER BY ran_at DESC
     LIMIT 1
-  `) as Array<{ id: string; ran_at: string; sources_checked: number | null; items_found: number | null }>;
+  `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'sources_checked' | 'items_found' | 'error'>>;
 
   if (runs.length === 0) {
     return {
+      status: 'done',
       ran_at: new Date().toISOString(),
+      error: null,
       sources_checked: 0,
       items_found: 0,
       items: [],
@@ -26,18 +27,23 @@ async function getLatest(): Promise<LatestResponse> {
   }
 
   const run = runs[0];
-  const items = (await db`
-    SELECT id, type, title, source_name, source_url, thumbnail_url,
-           favicon_char, published_at, why_matters
-    FROM items
-    WHERE run_id = ${run.id}
-    ORDER BY display_order ASC
-  `) as ItemRow[];
+  const items =
+    run.status === 'done'
+      ? ((await db`
+          SELECT id, type, title, source_name, source_url, thumbnail_url,
+                 favicon_char, published_at, why_matters
+          FROM items
+          WHERE run_id = ${run.id}
+          ORDER BY display_order ASC
+        `) as ItemRow[])
+      : [];
 
   return {
+    status: run.status,
     ran_at: run.ran_at,
-    sources_checked: run.sources_checked ?? 0,
-    items_found: run.items_found ?? 0,
+    error: run.error,
+    sources_checked: run.sources_checked,
+    items_found: run.items_found,
     items: items.map((it) => ({
       id: it.id,
       type: it.type,
@@ -64,6 +70,16 @@ function timeAgo(iso: string | null): string {
   if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
   const days = Math.round(hours / 24);
   return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+function isToday(iso: string): boolean {
+  const d = new Date(iso);
+  const n = new Date();
+  return (
+    d.getFullYear() === n.getFullYear() &&
+    d.getMonth() === n.getMonth() &&
+    d.getDate() === n.getDate()
+  );
 }
 
 function LinkOut({ href }: { href: string }) {
@@ -163,23 +179,52 @@ function EmptyState({ sourcesChecked }: { sourcesChecked: number }) {
   );
 }
 
+function FailureBanner({ error, ranAt }: { error: string | null; ranAt: string }) {
+  const heading = isToday(ranAt) ? 'Scout failed this morning.' : 'Scout failed this run.';
+  return (
+    <div className="status-banner status-banner--failed" role="alert">
+      <h2>{heading}</h2>
+      {error && <p className="status-banner-body">{error}</p>}
+      <p className="status-banner-foot">
+        Try <strong>Run now</strong> when ready, or check the GitHub Actions log for full details.
+      </p>
+    </div>
+  );
+}
+
+function RunningBanner() {
+  return (
+    <div className="status-banner status-banner--running" role="status">
+      <h2>Scout is running.</h2>
+      <p className="status-banner-body">Refresh in a minute or two.</p>
+    </div>
+  );
+}
+
 export default async function Page() {
   const data = await getLatest();
+  const showSummary = data.status === 'done';
 
   return (
     <main className="page">
-      <HeaderClient />
+      <HeaderClient ranAt={data.ran_at} />
 
-      <p className="summary">
-        Scout checked <strong>{data.sources_checked} source{data.sources_checked === 1 ? '' : 's'}</strong>
-        {' · '}
-        found <strong>{data.items_found} thing{data.items_found === 1 ? '' : 's'}</strong> worth your time.
-      </p>
+      {showSummary && (
+        <p className="summary">
+          Scout checked <strong>{data.sources_checked ?? 0} source{(data.sources_checked ?? 0) === 1 ? '' : 's'}</strong>
+          {' · '}
+          found <strong>{data.items_found ?? 0} thing{(data.items_found ?? 0) === 1 ? '' : 's'}</strong> worth your time.
+        </p>
+      )}
 
       <div className="divider" />
 
-      {data.items.length === 0 ? (
-        <EmptyState sourcesChecked={data.sources_checked} />
+      {data.status === 'failed' ? (
+        <FailureBanner error={data.error} ranAt={data.ran_at} />
+      ) : data.status === 'running' || data.status === 'pending' ? (
+        <RunningBanner />
+      ) : data.items.length === 0 ? (
+        <EmptyState sourcesChecked={data.sources_checked ?? 0} />
       ) : (
         <div className="card-list">
           {data.items.map((item) =>

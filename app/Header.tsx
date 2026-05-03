@@ -2,8 +2,24 @@
 
 import { useEffect, useState } from 'react';
 
-export function HeaderClient() {
+function formatLastScanned(iso: string): string {
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return '';
+  const now = new Date();
+
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const dayDelta = Math.round((startOfDay(now) - startOfDay(then)) / (1000 * 60 * 60 * 24));
+
+  const time = then.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase().replace(' ', '');
+
+  if (dayDelta <= 0) return `Last scanned ${time}`;
+  if (dayDelta === 1) return `Last scanned yesterday at ${time}`;
+  return `Last scanned ${dayDelta} days ago`;
+}
+
+export function HeaderClient({ ranAt }: { ranAt: string | null }) {
   const [date, setDate] = useState('');
+  const [lastScanned, setLastScanned] = useState('');
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -16,7 +32,8 @@ export function HeaderClient() {
         day: 'numeric',
       }),
     );
-  }, []);
+    if (ranAt) setLastScanned(formatLastScanned(ranAt));
+  }, [ranAt]);
 
   async function runNow() {
     if (running) return;
@@ -42,6 +59,7 @@ export function HeaderClient() {
         <div className="header-left">
           <h1 className="greeting">Morning, Ben.</h1>
           <p className="date-line">{date}</p>
+          {lastScanned && <p className="last-scanned">{lastScanned}</p>}
         </div>
         <div className={`header-actions${running ? ' running' : ''}`}>
           <button className="btn-run" type="button" onClick={runNow}>

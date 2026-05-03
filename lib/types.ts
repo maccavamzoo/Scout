@@ -26,9 +26,11 @@ export interface ItemRow {
 }
 
 export interface LatestResponse {
+  status: 'done' | 'failed' | 'running' | 'pending';
   ran_at: string;
-  sources_checked: number;
-  items_found: number;
+  error: string | null;
+  sources_checked: number | null;
+  items_found: number | null;
   items: Array<{
     id: string;
     type: ItemType;
