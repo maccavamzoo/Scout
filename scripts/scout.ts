@@ -42,8 +42,11 @@ async function loadLastSuccessfulRunDate(): Promise<string | null> {
     WHERE status = 'done'
     ORDER BY ran_at DESC
     LIMIT 1
-  `) as Array<{ ran_at: string }>;
-  return rows[0]?.ran_at ?? null;
+  `) as Array<{ ran_at: string | Date }>;
+  const raw = rows[0]?.ran_at;
+  if (!raw) return null;
+  // Neon's serverless driver returns TIMESTAMPTZ as Date — normalise to ISO.
+  return raw instanceof Date ? raw.toISOString() : String(raw);
 }
 
 async function startRun(): Promise<string> {
@@ -116,12 +119,19 @@ async function markFailed(runId: string | null, message: string): Promise<void> 
 
 // ── User message ─────────────────────────────────────────────────────────────
 
+function formatLastRun(value: string | Date | null | undefined): string {
+  if (value == null) return 'never';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return 'never';
+  return d.toISOString().slice(0, 10);
+}
+
 function buildUserMessage(
   ratings: Array<{ rating: string; title: string; source_name: string; why_matters: string }>,
-  lastRunIso: string | null,
+  lastRunIso: string | Date | null,
 ): string {
   const today = new Date().toISOString().slice(0, 10);
-  const lastRun = lastRunIso ? lastRunIso.slice(0, 10) : 'never';
+  const lastRun = formatLastRun(lastRunIso);
 
   const ratingsBlock = ratings.length
     ? ratings
