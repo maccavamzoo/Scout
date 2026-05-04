@@ -47,43 +47,51 @@ export async function POST() {
   }
 
   // Guard against double-billing — if the previous run is still mid-flight, refuse.
+  // Wrapped because the query touches columns added by recent schema patches
+  // (session_id especially); if the migration hasn't been run, we'd rather
+  // dispatch unguarded than block the user entirely.
   const db = sql();
-  const recent = (await db`
-    SELECT id, session_id, stage_updated_at, ran_at
-    FROM runs
-    WHERE status IN ('running', 'pending')
-    ORDER BY ran_at DESC
-    LIMIT 1
-  `) as Array<{
-    id: string;
-    session_id: string | null;
-    stage_updated_at: string | Date | null;
-    ran_at: string | Date;
-  }>;
+  try {
+    const recent = (await db`
+      SELECT id, session_id, stage_updated_at, ran_at
+      FROM runs
+      WHERE status IN ('running', 'pending')
+      ORDER BY ran_at DESC
+      LIMIT 1
+    `) as Array<{
+      id: string;
+      session_id: string | null;
+      stage_updated_at: string | Date | null;
+      ran_at: string | Date;
+    }>;
 
-  if (recent.length > 0) {
-    const row = recent[0];
-    const lastTouchMs = timestampMs(row.stage_updated_at) || timestampMs(row.ran_at);
-    const ageMs = Date.now() - lastTouchMs;
-    if (ageMs < STALE_AFTER_MS) {
-      return NextResponse.json(
-        { ok: false, reason: 'already_running' },
-        { status: 409 },
-      );
+    if (recent.length > 0) {
+      const row = recent[0];
+      const lastTouchMs = timestampMs(row.stage_updated_at) || timestampMs(row.ran_at);
+      const ageMs = Date.now() - lastTouchMs;
+      if (ageMs < STALE_AFTER_MS) {
+        return NextResponse.json(
+          { ok: false, reason: 'already_running' },
+          { status: 409 },
+        );
+      }
+      // Stale — clean up the orphaned session and mark the row failed before dispatching.
+      if (row.session_id) {
+        await endStuckSession(row.session_id);
+      }
+      await db`
+        UPDATE runs
+        SET status = 'failed',
+            error = 'orchestrator process did not finish — cleaned up by /api/run',
+            stage = NULL,
+            stage_detail = NULL,
+            stage_updated_at = NOW()
+        WHERE id = ${row.id}
+      `;
     }
-    // Stale — clean up the orphaned session and mark the row failed before dispatching.
-    if (row.session_id) {
-      await endStuckSession(row.session_id);
-    }
-    await db`
-      UPDATE runs
-      SET status = 'failed',
-          error = 'orchestrator process did not finish — cleaned up by /api/run',
-          stage = NULL,
-          stage_detail = NULL,
-          stage_updated_at = NOW()
-      WHERE id = ${row.id}
-    `;
+  } catch (err) {
+    console.error('[/api/run] double-billing guard skipped (likely missing schema migration):', err);
+    // Fall through and dispatch — the guard is a nice-to-have, not essential.
   }
 
   const url = `https://api.github.com/repos/${repo}/actions/workflows/scout.yml/dispatches`;
