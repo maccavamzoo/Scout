@@ -15,6 +15,7 @@ export interface RunRow {
   input_tokens: number | null;
   output_tokens: number | null;
   cost_usd: number | null;
+  session_id: string | null;
 }
 
 export interface ItemRow {

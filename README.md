@@ -28,6 +28,7 @@ The agent decides where to look every morning, finds new bike releases / leaks /
    - `GITHUB_TOKEN` (fine-grained PAT, `actions:write` on this repo)
    - `GITHUB_REPO` (e.g. `maccavamzoo/scout`)
    - **Optional, for the "Credits remaining" header line:** `ANTHROPIC_ADMIN_KEY` (admin key with billing read access). If missing, the line is hidden — everything else still works.
+   - **Optional, for stale-session cleanup from `/api/run`:** `ANTHROPIC_API_KEY` (the same one used in GitHub Actions). If missing, `/api/run` still refuses to start a new run while one is in flight, but it can't terminate orphaned Anthropic sessions when the orchestrator process crashes — those will time out on their own (~minutes).
 
 5. **Trigger the first run** manually from the GitHub Actions tab (Scout workflow → Run workflow), or hit "Run now" on the deployed page. First run will be cold (no memory, no ratings); rate a few cards once it lands and the next run starts learning.
 

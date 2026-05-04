@@ -58,3 +58,6 @@ CREATE INDEX idx_ratings_created ON ratings(created_at DESC);
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS input_tokens INT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS output_tokens INT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10, 4);
+
+-- ── v2 patch: track agent session id so /api/run can clean up stale runs ─────
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS session_id TEXT;

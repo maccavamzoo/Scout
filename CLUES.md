@@ -33,6 +33,15 @@
 - Pricing constants live at the top of `scripts/scout.ts` (`OPUS_INPUT_USD_PER_MTOK`, `OPUS_OUTPUT_USD_PER_MTOK`). Hardcoded for `claude-opus-4-7` — the model the agent is configured for in `setup-agent.ts`. Update both places if the model changes.
 - The cost stored in `runs.cost_usd` is an **estimate** that does not adjust for cache pricing (cache reads should be cheaper than fresh input). It will be slightly high for cache-heavy runs; acceptable for a top-of-page indicator.
 
+## Network resilience and session cleanup
+
+- The orchestrator's stream loop catches transient network errors (`terminated`, `Fetch.onAborted`, `ECONNRESET`, `ETIMEDOUT`, `socket hang up`, `network error`, `fetch failed`, `undici`, `AbortError`) and reconnects against the same session ID after a 30 s wait. Sessions are stateful on Anthropic's side, so the agent picks up where it left off.
+- One shared retry counter (`MAX_RECOVER_RETRIES = 3`) covers both rate-limit reconnects and network reconnects. Beyond 3 we give up.
+- On any abnormal exit (rate-limit exhausted, network-retry exhausted, JSON parse failure, anything else), the orchestrator's `finally` block calls `endSession()` — `user.interrupt` to stop the agent, then `archive` to free the container. The interrupt is the bit that saves money; the archive is housekeeping.
+- The session id is stored on `runs.session_id` so `/api/run` can clean up stuck sessions when the orchestrator process itself crashed (OOM, container terminated) and never reached `finally`.
+- `/api/run` refuses with `409 {ok: false, reason: 'already_running'}` if a `running`/`pending` run is less than 10 minutes old. Stale rows older than that get marked failed and their session terminated before the new workflow dispatches.
+- Cleanup from `/api/run` requires `ANTHROPIC_API_KEY` on Vercel — without it, stale rows still get marked failed but the orphaned session at Anthropic is left to time out on its own (~minutes).
+
 ## Credits remaining
 
 - `/api/balance` is best-effort and falls back to `null` on failure. The page hides the line entirely when null.

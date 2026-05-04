@@ -346,10 +346,16 @@ export function Shell({ initial }: { initial: LatestResponse }) {
     }));
     try {
       const res = await fetch('/api/run', { method: 'POST' });
-      if (!res.ok) {
+      if (res.status === 409) {
+        const body = (await res.json().catch(() => null)) as { reason?: string } | null;
+        if (body?.reason === 'already_running') {
+          setMessage('Scout is already running — wait for it to finish before triggering another.');
+        } else {
+          setMessage('Could not start Scout.');
+        }
+      } else if (!res.ok) {
         setMessage('Could not start Scout. Check the GitHub token.');
       } else {
-        // Refresh balance after kicking a run — it'll have ticked down by the time it lands.
         fetchBalance();
       }
     } catch {

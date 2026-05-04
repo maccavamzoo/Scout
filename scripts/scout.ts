@@ -240,6 +240,56 @@ async function downloadResults(client: Anthropic, sessionId: string): Promise<Ag
   throw new Error(`agent did not write ${RESULTS_PATH}`);
 }
 
+// ── Network-drop detection and session cleanup ───────────────────────────────
+
+function isNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message ?? '';
+  const name = err.name ?? '';
+  return (
+    /terminated/i.test(msg) ||
+    /Fetch\.onAborted/i.test(msg) ||
+    /ECONNRESET/i.test(msg) ||
+    /ETIMEDOUT/i.test(msg) ||
+    /socket hang up/i.test(msg) ||
+    /network error/i.test(msg) ||
+    /fetch failed/i.test(msg) ||
+    /undici/i.test(msg) ||
+    name === 'AbortError'
+  );
+}
+
+// Stop the agent at Anthropic and free the container. Idempotent and best-effort.
+async function endSession(client: Anthropic, sessionId: string): Promise<void> {
+  // 1. Interrupt — brings the agent to a safe-boundary idle so it stops working.
+  try {
+    await client.beta.sessions.events.send(sessionId, {
+      events: [{ type: 'user.interrupt' }],
+    } as any);
+    log(`interrupted session ${sessionId}`);
+  } catch (err) {
+    log(`interrupt failed for session ${sessionId}:`, err);
+  }
+
+  // 2. Wait for non-running before archive (avoids the post-idle status-write race).
+  try {
+    for (let i = 0; i < 10; i++) {
+      const s = await client.beta.sessions.retrieve(sessionId);
+      if (s.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    await client.beta.sessions.archive(sessionId);
+    log(`archived session ${sessionId}`);
+  } catch (err) {
+    log(`archive failed for session ${sessionId} (non-fatal):`, err);
+  }
+}
+
+async function attachSessionId(runId: string, sessionId: string): Promise<void> {
+  const db = sql();
+  await db`UPDATE runs SET session_id = ${sessionId} WHERE id = ${runId}`;
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -251,9 +301,11 @@ async function main() {
 
   const runId = await startRun();
   let stageNow = 'planning';
+  let sessionId: string | null = null;
+  let sessionCompletedNormally = false;
+  const client = new Anthropic();
 
   try {
-    const client = new Anthropic();
 
     // Look up the memory_store_id we stashed on the agent at setup time.
     const agent = await client.beta.agents.retrieve(agentId);
@@ -278,6 +330,8 @@ async function main() {
         } as any,
       ],
     });
+    sessionId = session.id;
+    await attachSessionId(runId, sessionId);
     log(`session ${session.id} (agent ${agentId} v${agent.version})`);
 
     const userMessage = buildUserMessage(ratings, lastRunDate);
@@ -291,9 +345,12 @@ async function main() {
       ],
     } as any);
 
-    let rateLimitRetries = 0;
-    const MAX_RATE_LIMIT_RETRIES = 3;
+    // Single shared retry counter for any recoverable mid-session failure
+    // (session.error rate-limit OR transient network drop). Cap at 3 total.
+    let recoverRetries = 0;
+    const MAX_RECOVER_RETRIES = 3;
     const RATE_LIMIT_WAIT_MS = 90_000;
+    const NETWORK_WAIT_MS = 30_000;
     let lastDetail = 'briefing the agent';
 
     // Accumulated token usage across the run. span.model_request_end events
@@ -302,57 +359,74 @@ async function main() {
     let outputTokens = 0;
 
     streamLoop: while (true) {
-      for await (const ev of stream as any) {
-        const t = ev.type as string;
-        log(t);
+      try {
+        for await (const ev of stream as any) {
+          const t = ev.type as string;
+          log(t);
 
-        if (t === 'agent.tool_use') {
-          const mapped = describeToolUse(ev);
-          if (mapped && (mapped.stage !== stageNow || mapped.detail)) {
-            stageNow = mapped.stage;
-            lastDetail = mapped.detail;
-            await setStage(runId, mapped.stage, mapped.detail);
+          if (t === 'agent.tool_use') {
+            const mapped = describeToolUse(ev);
+            if (mapped && (mapped.stage !== stageNow || mapped.detail)) {
+              stageNow = mapped.stage;
+              lastDetail = mapped.detail;
+              await setStage(runId, mapped.stage, mapped.detail);
+            }
           }
-        }
 
-        if (t === 'span.model_request_end' && ev.model_usage) {
-          const u = ev.model_usage;
-          inputTokens += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-          outputTokens += u.output_tokens ?? 0;
-        }
+          if (t === 'span.model_request_end' && ev.model_usage) {
+            const u = ev.model_usage;
+            inputTokens += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+            outputTokens += u.output_tokens ?? 0;
+          }
 
-        if (t === 'session.error') {
-          const errMsg: string = ev.error?.message ?? '';
-          const errType: string = ev.error?.type ?? '';
-          const isRateLimit =
-            /rate.?limit/i.test(errMsg) || /rate.?limit/i.test(errType);
+          if (t === 'session.error') {
+            const errMsg: string = ev.error?.message ?? '';
+            const errType: string = ev.error?.type ?? '';
+            const isRateLimit =
+              /rate.?limit/i.test(errMsg) || /rate.?limit/i.test(errType);
 
-          if (isRateLimit && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
-            rateLimitRetries++;
-            log(
-              `hit rate limit, waiting ${RATE_LIMIT_WAIT_MS / 1000}s before resuming (retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`,
+            if (isRateLimit && recoverRetries < MAX_RECOVER_RETRIES) {
+              recoverRetries++;
+              log(
+                `hit rate limit, waiting ${RATE_LIMIT_WAIT_MS / 1000}s before resuming (retry ${recoverRetries}/${MAX_RECOVER_RETRIES})`,
+              );
+              await setStage(runId, 'waiting', 'hit rate limit, waiting to resume');
+              await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_MS));
+              await setStage(runId, stageNow, lastDetail);
+              stream = await client.beta.sessions.events.stream(session.id);
+              continue streamLoop;
+            }
+
+            throw new Error(
+              `session.error: ${errMsg || errType || JSON.stringify(ev.error ?? ev)}`,
             );
-            await setStage(runId, 'waiting', 'hit rate limit, waiting to resume');
-            await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_MS));
-            await setStage(runId, stageNow, lastDetail);
-            stream = await client.beta.sessions.events.stream(session.id);
-            continue streamLoop;
           }
 
-          throw new Error(
-            `session.error: ${errMsg || errType || JSON.stringify(ev.error ?? ev)}`,
+          if (t === 'session.status_terminated') break streamLoop;
+          if (t === 'session.status_idle') {
+            const stopType = ev.stop_reason?.type;
+            if (stopType === 'requires_action') continue; // we have no custom tools, so this shouldn't happen
+            break streamLoop; // end_turn or retries_exhausted
+          }
+        }
+        // for-await exited without an explicit break — stream closed cleanly. Done.
+        break streamLoop;
+      } catch (err) {
+        // Network drop: reconnect against the same session — Managed Agents
+        // sessions are stateful, so the agent picks up where it left off.
+        if (isNetworkError(err) && recoverRetries < MAX_RECOVER_RETRIES) {
+          recoverRetries++;
+          log(
+            `network error, waiting ${NETWORK_WAIT_MS / 1000}s before resuming (retry ${recoverRetries}/${MAX_RECOVER_RETRIES}): ${(err as Error).message}`,
           );
+          await setStage(runId, 'waiting', 'connection dropped, reconnecting');
+          await new Promise((r) => setTimeout(r, NETWORK_WAIT_MS));
+          await setStage(runId, stageNow, lastDetail);
+          stream = await client.beta.sessions.events.stream(session.id);
+          continue streamLoop;
         }
-
-        if (t === 'session.status_terminated') break streamLoop;
-        if (t === 'session.status_idle') {
-          const stopType = ev.stop_reason?.type;
-          if (stopType === 'requires_action') continue; // we have no custom tools, so this shouldn't happen
-          break streamLoop; // end_turn or retries_exhausted
-        }
+        throw err;
       }
-      // for-await exited without an explicit break — stream closed unexpectedly.
-      break streamLoop;
     }
 
     await setStage(runId, 'writing', 'reading the agent\'s findings');
@@ -364,6 +438,7 @@ async function main() {
       inputTokens,
       outputTokens,
     });
+    sessionCompletedNormally = true;
 
     // Tidy up the session — agent + environment + memory store all persist.
     try {
@@ -376,6 +451,13 @@ async function main() {
     log('FAILED:', msg);
     await markFailed(runId, msg);
     process.exitCode = 1;
+  } finally {
+    // If we exited abnormally with an active session, end it so the agent
+    // doesn't keep working (and burning tokens) until its own internal limits
+    // expire.
+    if (sessionId && !sessionCompletedNormally) {
+      await endSession(client, sessionId);
+    }
   }
 }
 
