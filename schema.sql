@@ -53,3 +53,8 @@ CREATE TABLE ratings (
 
 CREATE UNIQUE INDEX idx_ratings_item ON ratings(item_id);
 CREATE INDEX idx_ratings_created ON ratings(created_at DESC);
+
+-- ── v2 patch: per-run token usage + estimated cost ───────────────────────────
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS input_tokens INT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS output_tokens INT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10, 4);

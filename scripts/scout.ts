@@ -69,7 +69,25 @@ async function setStage(runId: string, stage: string, detail: string): Promise<v
   log(`stage: ${stage} — ${detail}`);
 }
 
-async function finaliseRun(runId: string, reasoning: string, items: AgentResults['items']): Promise<void> {
+// Pricing per million tokens. Update when Anthropic changes prices, or to match
+// whatever model the agent is set to in scripts/setup-agent.ts. The agent there
+// is configured for claude-opus-4-7.
+const OPUS_INPUT_USD_PER_MTOK = 15;
+const OPUS_OUTPUT_USD_PER_MTOK = 75;
+
+function estimateCostUsd(inputTokens: number, outputTokens: number): number {
+  return (
+    (inputTokens / 1_000_000) * OPUS_INPUT_USD_PER_MTOK +
+    (outputTokens / 1_000_000) * OPUS_OUTPUT_USD_PER_MTOK
+  );
+}
+
+async function finaliseRun(
+  runId: string,
+  reasoning: string,
+  items: AgentResults['items'],
+  usage: { inputTokens: number; outputTokens: number },
+): Promise<void> {
   const db = sql();
   await Promise.all(
     items.map((it, idx) => db`
@@ -85,18 +103,25 @@ async function finaliseRun(runId: string, reasoning: string, items: AgentResults
     `),
   );
 
+  const costUsd = estimateCostUsd(usage.inputTokens, usage.outputTokens);
+
   await db`
     UPDATE runs
     SET status = 'done',
         sources_checked = NULL,
         items_found = ${items.length},
         scout_reasoning = ${reasoning},
+        input_tokens = ${usage.inputTokens},
+        output_tokens = ${usage.outputTokens},
+        cost_usd = ${costUsd.toFixed(4)},
         stage = NULL,
         stage_detail = NULL,
         stage_updated_at = NOW()
     WHERE id = ${runId}
   `;
-  log(`finalised run ${runId} with ${items.length} items`);
+  log(
+    `finalised run ${runId} with ${items.length} items — ${usage.inputTokens} in / ${usage.outputTokens} out, ~$${costUsd.toFixed(4)}`,
+  );
 }
 
 async function markFailed(runId: string | null, message: string): Promise<void> {
@@ -271,6 +296,11 @@ async function main() {
     const RATE_LIMIT_WAIT_MS = 90_000;
     let lastDetail = 'briefing the agent';
 
+    // Accumulated token usage across the run. span.model_request_end events
+    // each carry a model_usage block; sum them as we stream.
+    let inputTokens = 0;
+    let outputTokens = 0;
+
     streamLoop: while (true) {
       for await (const ev of stream as any) {
         const t = ev.type as string;
@@ -283,6 +313,12 @@ async function main() {
             lastDetail = mapped.detail;
             await setStage(runId, mapped.stage, mapped.detail);
           }
+        }
+
+        if (t === 'span.model_request_end' && ev.model_usage) {
+          const u = ev.model_usage;
+          inputTokens += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+          outputTokens += u.output_tokens ?? 0;
         }
 
         if (t === 'session.error') {
@@ -324,7 +360,10 @@ async function main() {
     const results = await downloadResults(client, session.id);
     log(`agent returned ${results.items?.length ?? 0} items`);
 
-    await finaliseRun(runId, results.reasoning ?? '', results.items ?? []);
+    await finaliseRun(runId, results.reasoning ?? '', results.items ?? [], {
+      inputTokens,
+      outputTokens,
+    });
 
     // Tidy up the session — agent + environment + memory store all persist.
     try {

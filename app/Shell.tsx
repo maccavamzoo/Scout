@@ -1,7 +1,30 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import type { LatestItem, LatestResponse, Rating } from '@/lib/types';
+import type { BalanceResponse, LatestItem, LatestResponse, Rating } from '@/lib/types';
+
+const LOW_BALANCE_USD = 2;
+const CONSOLE_URL = 'https://console.anthropic.com';
+
+function formatTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  return `${Math.round(n / 1000)}k`;
+}
+
+function formatCost(usd: number): string {
+  return `~$${usd.toFixed(2)}`;
+}
+
+function formatBalance(usd: number): string {
+  return usd >= 100
+    ? `$${usd.toFixed(0)}`
+    : `$${usd.toFixed(2)}`;
+}
+
+function isCreditError(error: string | null): boolean {
+  if (!error) return false;
+  return /credit|balance|insufficient/i.test(error);
+}
 
 function timeAgo(iso: string | null): string {
   if (!iso) return '';
@@ -210,12 +233,27 @@ function EmptyState({ sourcesChecked }: { sourcesChecked: number }) {
   );
 }
 
-function FailureBanner({ error, ranAt }: { error: string | null; ranAt: string }) {
+function FailureBanner({
+  error,
+  ranAt,
+  balanceUsd,
+}: {
+  error: string | null;
+  ranAt: string;
+  balanceUsd: number | null;
+}) {
   const heading = isToday(ranAt) ? 'Scout failed this morning.' : 'Scout failed this run.';
+  const showBalanceLine = isCreditError(error) && balanceUsd != null;
   return (
     <div className="status-banner status-banner--failed" role="alert">
       <h2>{heading}</h2>
       {error && <p className="status-banner-body">{error}</p>}
+      {showBalanceLine && (
+        <p className="status-banner-credits">
+          Credits remaining: <strong>{formatBalance(balanceUsd!)}</strong> — top up at{' '}
+          <a href={CONSOLE_URL} target="_blank" rel="noopener noreferrer">console.anthropic.com</a>
+        </p>
+      )}
       <p className="status-banner-foot">
         Try <strong>Run now</strong> when ready, or check the GitHub Actions log for full details.
       </p>
@@ -241,6 +279,20 @@ export function Shell({ initial }: { initial: LatestResponse }) {
   const [lastScanned, setLastScanned] = useState('');
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [balance, setBalance] = useState<number | null>(null);
+
+  const fetchBalance = useCallback(async () => {
+    try {
+      const body = (await fetch('/api/balance', { cache: 'no-store' }).then((r) => r.json())) as BalanceResponse;
+      setBalance(body.balance_usd);
+    } catch {
+      // Silent — page hides the line if balance is null.
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchBalance();
+  }, [fetchBalance]);
 
   useEffect(() => {
     setDate(
@@ -263,13 +315,22 @@ export function Shell({ initial }: { initial: LatestResponse }) {
     const interval = setInterval(async () => {
       try {
         const fresh = (await fetch('/api/latest', { cache: 'no-store' }).then((r) => r.json())) as LatestResponse;
-        setData(fresh);
+        setData((prev) => {
+          // When the run flips to a terminal state, refresh balance.
+          if (
+            (fresh.status === 'done' || fresh.status === 'failed') &&
+            prev.status !== fresh.status
+          ) {
+            fetchBalance();
+          }
+          return fresh;
+        });
       } catch {
         // Network blip — keep polling.
       }
     }, 4000);
     return () => clearInterval(interval);
-  }, [data.status]);
+  }, [data.status, fetchBalance]);
 
   const runNow = useCallback(async () => {
     if (running) return;
@@ -287,13 +348,16 @@ export function Shell({ initial }: { initial: LatestResponse }) {
       const res = await fetch('/api/run', { method: 'POST' });
       if (!res.ok) {
         setMessage('Could not start Scout. Check the GitHub token.');
+      } else {
+        // Refresh balance after kicking a run — it'll have ticked down by the time it lands.
+        fetchBalance();
       }
     } catch {
       setMessage('Could not start Scout. Check the GitHub token.');
     } finally {
       setTimeout(() => setRunning(false), 1500);
     }
-  }, [running]);
+  }, [running, fetchBalance]);
 
   const rateItem = useCallback((itemId: string, rating: Rating) => {
     // Optimistic — flip the UI immediately, then POST.
@@ -312,6 +376,16 @@ export function Shell({ initial }: { initial: LatestResponse }) {
 
   const showSummary = data.status === 'done' && data.items.length > 0;
 
+  const showRunUsage =
+    data.status === 'done' &&
+    data.cost_usd != null &&
+    data.input_tokens != null &&
+    data.output_tokens != null;
+  const totalTokens = (data.input_tokens ?? 0) + (data.output_tokens ?? 0);
+
+  const showBalance = balance != null;
+  const lowBalance = balance != null && balance < LOW_BALANCE_USD;
+
   return (
     <main className="page">
       <header className="header">
@@ -319,6 +393,32 @@ export function Shell({ initial }: { initial: LatestResponse }) {
           <h1 className="greeting">Morning, Ben.</h1>
           <p className="date-line">{date}</p>
           {lastScanned && <p className="last-scanned">{lastScanned}</p>}
+          {showRunUsage && (
+            <p className="last-scanned">
+              This run: {formatTokens(totalTokens)} tokens · {formatCost(data.cost_usd!)}
+            </p>
+          )}
+          {showBalance && !lowBalance && (
+            <p className="last-scanned">Credits remaining: {formatBalance(balance!)}</p>
+          )}
+          {showBalance && lowBalance && (
+            <p className="last-scanned credits-low">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M8 1.5L15 14H1L8 1.5Z M8 6V10 M8 11.5V12.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Credits low: {formatBalance(balance!)} —{' '}
+              <a href={CONSOLE_URL} target="_blank" rel="noopener noreferrer">
+                top up at console.anthropic.com
+              </a>
+            </p>
+          )}
         </div>
         <div className={`header-actions${running ? ' running' : ''}`}>
           <button className="btn-run" type="button" onClick={runNow}>
@@ -351,7 +451,7 @@ export function Shell({ initial }: { initial: LatestResponse }) {
       <div className="divider" />
 
       {data.status === 'failed' ? (
-        <FailureBanner error={data.error} ranAt={data.ran_at} />
+        <FailureBanner error={data.error} ranAt={data.ran_at} balanceUsd={balance} />
       ) : data.status === 'running' || data.status === 'pending' ? (
         <RunningBanner stage={data.stage} detail={data.stage_detail} />
       ) : data.items.length === 0 ? (

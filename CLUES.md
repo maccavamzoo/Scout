@@ -26,3 +26,16 @@
 - One rating per item; latest click wins. The schema's UNIQUE index on `ratings.item_id` enforces this — `/api/rate` upserts via `ON CONFLICT (item_id) DO UPDATE`.
 - Ratings are not "togglable to no-rating" — to undo, click the other thumb. Keeps the API binary.
 - The runner reads the last 14 days of ratings (joined to their `items` rows) and includes them in the daily user message so the agent has direct feedback signal.
+
+## Token usage and cost
+
+- Token usage is summed during the stream from `span.model_request_end` events. Each event carries a `model_usage` block with `input_tokens` / `output_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens`. Input total = `input_tokens + cache_creation + cache_read`.
+- Pricing constants live at the top of `scripts/scout.ts` (`OPUS_INPUT_USD_PER_MTOK`, `OPUS_OUTPUT_USD_PER_MTOK`). Hardcoded for `claude-opus-4-7` — the model the agent is configured for in `setup-agent.ts`. Update both places if the model changes.
+- The cost stored in `runs.cost_usd` is an **estimate** that does not adjust for cache pricing (cache reads should be cheaper than fresh input). It will be slightly high for cache-heavy runs; acceptable for a top-of-page indicator.
+
+## Credits remaining
+
+- `/api/balance` is best-effort and falls back to `null` on failure. The page hides the line entirely when null.
+- Tries `ANTHROPIC_ADMIN_KEY` first, then `ANTHROPIC_API_KEY`. The exact admin endpoint is not yet documented at a stable URL; the route attempts a couple of plausible paths (`/v1/organizations/me/balance`, `/v1/organizations/me/credits`) and parses common response field names. **Verify the endpoint once and replace the candidate list** with the canonical URL.
+- 5-minute in-process cache so the page doesn't pound the API on every nav.
+- Low-balance threshold is `LOW_BALANCE_USD` in `app/Shell.tsx` (currently $2). Below that, the meta line flips to coral with a warning icon and a "top up at console.anthropic.com" link.

@@ -74,6 +74,34 @@ body {
   letter-spacing: 0.02em;
 }
 
+.last-scanned.credits-low {
+  color: var(--coral);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 400;
+}
+.last-scanned.credits-low svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+.last-scanned.credits-low a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.status-banner-credits {
+  margin-top: 10px;
+  font-size: 0.875rem;
+  color: var(--coral);
+  font-weight: 500;
+}
+.status-banner-credits a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .header-actions {
   display: flex;
   align-items: center;

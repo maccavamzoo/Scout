@@ -12,6 +12,9 @@ export interface RunRow {
   stage: string | null;
   stage_detail: string | null;
   stage_updated_at: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
 }
 
 export interface ItemRow {
@@ -50,7 +53,16 @@ export interface LatestResponse {
   error: string | null;
   sources_checked: number | null;
   items_found: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
   items: LatestItem[];
+}
+
+export interface BalanceResponse {
+  // dollars; null = couldn't determine (no key, endpoint failed, etc.)
+  balance_usd: number | null;
+  source?: string;
 }
 
 // What the agent writes to /mnt/session/outputs/results.json.

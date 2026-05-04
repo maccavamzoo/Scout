@@ -9,12 +9,26 @@ async function getLatest(): Promise<LatestResponse> {
   const db = sql();
 
   const runs = (await db`
-    SELECT id, ran_at, status, sources_checked, items_found, error, stage, stage_detail
+    SELECT id, ran_at, status, sources_checked, items_found, error,
+           stage, stage_detail, input_tokens, output_tokens, cost_usd
     FROM runs
     ORDER BY ran_at DESC
     LIMIT 1
   `) as Array<
-    Pick<RunRow, 'id' | 'ran_at' | 'status' | 'sources_checked' | 'items_found' | 'error' | 'stage' | 'stage_detail'>
+    Pick<
+      RunRow,
+      | 'id'
+      | 'ran_at'
+      | 'status'
+      | 'sources_checked'
+      | 'items_found'
+      | 'error'
+      | 'stage'
+      | 'stage_detail'
+      | 'input_tokens'
+      | 'output_tokens'
+      | 'cost_usd'
+    >
   >;
 
   if (runs.length === 0) {
@@ -26,6 +40,9 @@ async function getLatest(): Promise<LatestResponse> {
       error: null,
       sources_checked: 0,
       items_found: 0,
+      input_tokens: null,
+      output_tokens: null,
+      cost_usd: null,
       items: [],
     };
   }
@@ -54,6 +71,11 @@ async function getLatest(): Promise<LatestResponse> {
         }>)
       : [];
 
+  // Neon's NUMERIC columns come back as strings — coerce.
+  const rawCost = run.cost_usd as unknown;
+  const cost_usd =
+    rawCost == null ? null : typeof rawCost === 'number' ? rawCost : Number(rawCost);
+
   return {
     status: run.status,
     stage: run.stage,
@@ -62,6 +84,9 @@ async function getLatest(): Promise<LatestResponse> {
     error: run.error,
     sources_checked: run.sources_checked,
     items_found: run.items_found,
+    input_tokens: run.input_tokens,
+    output_tokens: run.output_tokens,
+    cost_usd,
     items,
   };
 }
