@@ -9,11 +9,37 @@
 // sources, freshness, or judging.
 
 import Anthropic from '@anthropic-ai/sdk';
+import { Agent } from 'undici';
 import { sql } from '../lib/db';
 import type { AgentResults } from '../lib/types';
 
 const RESULTS_PATH = '/mnt/session/outputs/results.json';
 const RESULTS_FILENAME = 'results.json';
+
+// The Anthropic SDK's `timeout` option (default 10 min) only governs the
+// initial request to open the stream — it's cleared the moment fetch resolves
+// with the response object. What governs the *reading* of the stream is
+// undici's bodyTimeout: the gap between received bytes. undici's default is
+// 5 min (300_000 ms — verified in undici/lib/dispatcher/client.js, kBodyTimeout).
+//
+// During long agent thinking pauses (esp. after a tool returns), the SSE stream
+// goes quiet. If that gap exceeds 5 min, undici aborts with "terminated" /
+// "Fetch.onAborted" and we surface it as the network-error path below. Most of
+// those drops aren't network wobbles — they're undici killing an idle-but-fine
+// connection. Anthropic's stream sends periodic heartbeats but the interval
+// isn't documented; raising bodyTimeout to 10 min shifts well past their cap.
+//
+// We attach this dispatcher only to the long-lived events.stream() call —
+// short-lived calls (agents.retrieve, sessions.create, files.list) keep the
+// SDK defaults.
+const STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const STREAM_DISPATCHER = new Agent({
+  bodyTimeout: STREAM_IDLE_TIMEOUT_MS,
+  headersTimeout: STREAM_IDLE_TIMEOUT_MS,
+});
+const STREAM_REQUEST_OPTIONS = {
+  fetchOptions: { dispatcher: STREAM_DISPATCHER },
+} as const;
 
 function log(...args: unknown[]) {
   console.log('[scout]', ...args);
@@ -246,6 +272,9 @@ function isNetworkError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message ?? '';
   const name = err.name ?? '';
+  // Also cover undici's typed timeout errors directly — once we lift bodyTimeout
+  // to 10 min, hitting it again is much rarer, but if it happens we still want
+  // to recover rather than fail the run.
   return (
     /terminated/i.test(msg) ||
     /Fetch\.onAborted/i.test(msg) ||
@@ -255,7 +284,11 @@ function isNetworkError(err: unknown): boolean {
     /network error/i.test(msg) ||
     /fetch failed/i.test(msg) ||
     /undici/i.test(msg) ||
-    name === 'AbortError'
+    name === 'AbortError' ||
+    name === 'BodyTimeoutError' ||
+    name === 'HeadersTimeoutError' ||
+    name === 'ConnectTimeoutError' ||
+    name === 'SocketError'
   );
 }
 
@@ -337,7 +370,7 @@ async function main() {
     const userMessage = buildUserMessage(ratings, lastRunDate);
 
     // Stream-first: open the stream before sending the kickoff.
-    let stream = await client.beta.sessions.events.stream(session.id);
+    let stream = await client.beta.sessions.events.stream(session.id, undefined, STREAM_REQUEST_OPTIONS);
 
     await client.beta.sessions.events.send(session.id, {
       events: [
@@ -393,7 +426,7 @@ async function main() {
               await setStage(runId, 'waiting', 'hit rate limit, waiting to resume');
               await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_MS));
               await setStage(runId, stageNow, lastDetail);
-              stream = await client.beta.sessions.events.stream(session.id);
+              stream = await client.beta.sessions.events.stream(session.id, undefined, STREAM_REQUEST_OPTIONS);
               continue streamLoop;
             }
 
@@ -422,7 +455,7 @@ async function main() {
           await setStage(runId, 'waiting', 'connection dropped, reconnecting');
           await new Promise((r) => setTimeout(r, NETWORK_WAIT_MS));
           await setStage(runId, stageNow, lastDetail);
-          stream = await client.beta.sessions.events.stream(session.id);
+          stream = await client.beta.sessions.events.stream(session.id, undefined, STREAM_REQUEST_OPTIONS);
           continue streamLoop;
         }
         throw err;

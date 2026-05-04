@@ -33,6 +33,29 @@
 - Pricing constants live at the top of `scripts/scout.ts` (`OPUS_INPUT_USD_PER_MTOK`, `OPUS_OUTPUT_USD_PER_MTOK`). Hardcoded for `claude-opus-4-7` — the model the agent is configured for in `setup-agent.ts`. Update both places if the model changes.
 - The cost stored in `runs.cost_usd` is an **estimate** that does not adjust for cache pricing (cache reads should be cheaper than fresh input). It will be slightly high for cache-heavy runs; acceptable for a top-of-page indicator.
 
+## SSE stream timeouts (root cause of "terminated" errors)
+
+There are two layers of timeout to be aware of when reading from `client.beta.sessions.events.stream()`:
+
+1. **The Anthropic SDK's `timeout` option** (default `10 minutes`, `BaseAnthropic.DEFAULT_TIMEOUT = 600_000`). This **only governs the initial fetch resolving** — the SDK's `fetchWithTimeout` does `setTimeout(abort, ms)` and clears it the instant `fetch` returns the response object (`client.js` line ~367). It has zero effect on how long you can read from the stream.
+2. **undici's `bodyTimeout`** (default `300_000` ms = 5 min, set in `undici/lib/dispatcher/client.js` `kBodyTimeout`). This is the gap between received bytes. If the SSE stream goes silent for longer than this — which happens during agent thinking pauses after a tool returns — undici aborts the request with `terminated` / `Fetch.onAborted`. This is what surfaces as our "network errors."
+
+**Override:** construct an `undici` `Agent` with a longer `bodyTimeout` (and `headersTimeout` for symmetry) and pass it as a per-call option to `events.stream()` only:
+
+```ts
+import { Agent } from 'undici';
+const dispatcher = new Agent({ bodyTimeout: 10 * 60 * 1000, headersTimeout: 10 * 60 * 1000 });
+const stream = await client.beta.sessions.events.stream(
+  sessionId,
+  undefined,
+  { fetchOptions: { dispatcher } },
+);
+```
+
+Currently set to **10 minutes** — well past Anthropic's heartbeat cap (heartbeat interval isn't documented but is observed to be sub-minute in practice). Setting it client-wide is also possible via `new Anthropic({ fetchOptions: { dispatcher } })` but we don't, because it would also apply to short-lived calls (`agents.retrieve`, `sessions.create`, `files.list`) that should fail fast.
+
+The network-reconnect logic in `scripts/scout.ts` is still in place as a safety net — if the stream genuinely times out (>10 min thinking, or actual network drop), `isNetworkError()` matches and we reconnect.
+
 ## Network resilience and session cleanup
 
 - The orchestrator's stream loop catches transient network errors (`terminated`, `Fetch.onAborted`, `ECONNRESET`, `ETIMEDOUT`, `socket hang up`, `network error`, `fetch failed`, `undici`, `AbortError`) and reconnects against the same session ID after a 30 s wait. Sessions are stateful on Anthropic's side, so the agent picks up where it left off.
