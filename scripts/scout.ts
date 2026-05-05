@@ -185,15 +185,20 @@ ${diaryBlock || 'Nothing yet — this is the first run.'}`;
     const textBlock = [...finalMsg.content].reverse().find((b) => b.type === 'text');
     if (!textBlock || textBlock.type !== 'text') throw new Error('no text content in response');
 
-    let rawText = textBlock.text.trim();
-    rawText = rawText.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
+    const rawText = textBlock.text.trim();
 
-    let parsed: ParsedResults;
-    try {
-      parsed = JSON.parse(rawText) as ParsedResults;
-    } catch {
-      throw new Error(`JSON parse failed. Raw response:\n${rawText}`);
+    let parsed: ParsedResults | undefined;
+    try { parsed = JSON.parse(rawText) as ParsedResults; } catch { /* try harder */ }
+    if (!parsed) {
+      const fenced = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenced) try { parsed = JSON.parse(fenced[1]) as ParsedResults; } catch { /* next */ }
     }
+    if (!parsed) {
+      const start = rawText.indexOf('{');
+      const end = rawText.lastIndexOf('}');
+      if (start !== -1 && end > start) try { parsed = JSON.parse(rawText.slice(start, end + 1)) as ParsedResults; } catch { /* fall through */ }
+    }
+    if (!parsed) throw new Error(`JSON parse failed. Raw response:\n${rawText}`);
 
     const items = parsed.items ?? [];
     log(`Claude returned ${items.length} items`);
