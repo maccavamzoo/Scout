@@ -17,7 +17,5 @@ jobs:
       - name: Run Scout
         run: npx tsx scripts/scout.ts
         env:
-          ANTHROPIC_API_KEY:     ${{ secrets.ANTHROPIC_API_KEY }}
-          DATABASE_URL:          ${{ secrets.DATABASE_URL }}
-          SCOUT_AGENT_ID:        ${{ secrets.SCOUT_AGENT_ID }}
-          SCOUT_ENVIRONMENT_ID:  ${{ secrets.SCOUT_ENVIRONMENT_ID }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          DATABASE_URL:       ${{ secrets.DATABASE_URL }}

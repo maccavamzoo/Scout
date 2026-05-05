@@ -1,85 +1,75 @@
-// Scout v2 orchestrator — runs in GitHub Actions.
-//
-// Reads context from Neon → opens a session against the pre-created Scout agent
-// → streams events (mapping them to live stage updates) → downloads
-// /mnt/session/outputs/results.json → writes items + finalises the run.
-//
-// All agent intelligence (where to look, what's relevant, what's worth surfacing)
-// lives on the agent. This file is glue: it must not contain logic about
-// sources, freshness, or judging.
-
 import Anthropic from '@anthropic-ai/sdk';
-import { Agent } from 'undici';
 import { sql } from '../lib/db';
-import type { AgentResults } from '../lib/types';
 
-const RESULTS_PATH = '/mnt/session/outputs/results.json';
-const RESULTS_FILENAME = 'results.json';
+// Pricing per million tokens for claude-sonnet-4-6.
+// Does not include web_search per-query fees ($10/1k searches, billed separately by Anthropic).
+const SONNET_INPUT_USD_PER_MTOK = 3;
+const SONNET_OUTPUT_USD_PER_MTOK = 15;
 
-// The Anthropic SDK's `timeout` option (default 10 min) only governs the
-// initial request to open the stream — it's cleared the moment fetch resolves
-// with the response object. What governs the *reading* of the stream is
-// undici's bodyTimeout: the gap between received bytes. undici's default is
-// 5 min (300_000 ms — verified in undici/lib/dispatcher/client.js, kBodyTimeout).
-//
-// During long agent thinking pauses (esp. after a tool returns), the SSE stream
-// goes quiet. If that gap exceeds 5 min, undici aborts with "terminated" /
-// "Fetch.onAborted" and we surface it as the network-error path below. Most of
-// those drops aren't network wobbles — they're undici killing an idle-but-fine
-// connection. Anthropic's stream sends periodic heartbeats but the interval
-// isn't documented; raising bodyTimeout to 10 min shifts well past their cap.
-//
-// We attach this dispatcher only to the long-lived events.stream() call —
-// short-lived calls (agents.retrieve, sessions.create, files.list) keep the
-// SDK defaults.
-const STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
-const STREAM_DISPATCHER = new Agent({
-  bodyTimeout: STREAM_IDLE_TIMEOUT_MS,
-  headersTimeout: STREAM_IDLE_TIMEOUT_MS,
-});
-const STREAM_REQUEST_OPTIONS = {
-  fetchOptions: { dispatcher: STREAM_DISPATCHER },
-} as const;
+const SYSTEM_PROMPT = `You are Scout, a daily research agent for Bikotic — a UK cycling YouTube channel and bike comparison website (bikotic.com).
+
+# What you're hunting for
+
+- New bike releases — official launches across road, MTB, gravel, endurance, all-road, cyclocross
+- Rumoured or leaked releases — patents, race-prototype spy shots, manufacturer hints
+- Trending bikes — gaining traction in press, peloton, or community
+- Race results filtered through the bike — which bike won, which spec setup is suddenly winning
+- Innovative components, frames, kit, inventions
+- Value comparisons across all spec tiers (not just budget — also "is this £10k bike worth 5x the £2k one")
+
+# Out of scope
+
+E-bikes (unless mainstream crossover), commuter/utility, lifestyle content, pure training/nutrition, pure repair tutorials.
+
+# How to research
+
+Decide for yourself where to look. No fixed list — use whatever cycling press, manufacturer sites, race coverage, or YouTube content you can reach via web search. Try multiple angles. Verify URLs before you cite them.
+
+# Output
+
+Return ONLY a JSON object, no preamble or markdown fences:
+
+{
+  "diary_summary": "one short comma-separated list of the items you found today, max 20 words, used to deduplicate future runs",
+  "items": [
+    {
+      "type": "youtube" | "web",
+      "title": "...",
+      "source_name": "...",
+      "source_url": "https://...",
+      "thumbnail_url": "https://..." | null,
+      "published_at": "2026-05-05T..." | null,
+      "why_matters": "one sentence — plain-spoken, dry British undertones welcome, editorial, strip marketing language"
+    }
+  ]
+}
+
+If today is genuinely thin, return fewer items. Don't pad. An empty array is acceptable; a dishonest result is not.`;
+
+interface ResultItem {
+  type: 'youtube' | 'web';
+  title: string;
+  source_name: string;
+  source_url: string;
+  thumbnail_url?: string | null;
+  published_at?: string | null;
+  why_matters: string;
+}
+
+interface ParsedResults {
+  diary_summary: string;
+  items: ResultItem[];
+}
 
 function log(...args: unknown[]) {
   console.log('[scout]', ...args);
-}
-
-// ── Neon helpers ─────────────────────────────────────────────────────────────
-
-async function loadRecentRatings(): Promise<
-  Array<{ rating: string; title: string; source_name: string; why_matters: string }>
-> {
-  const db = sql();
-  return (await db`
-    SELECT r.rating, i.title, i.source_name, i.why_matters
-    FROM ratings r
-    JOIN items i ON i.id = r.item_id
-    WHERE r.created_at > NOW() - INTERVAL '14 days'
-    ORDER BY r.created_at DESC
-  `) as Array<{ rating: string; title: string; source_name: string; why_matters: string }>;
-}
-
-async function loadLastSuccessfulRunDate(): Promise<string | null> {
-  const db = sql();
-  const rows = (await db`
-    SELECT ran_at
-    FROM runs
-    WHERE status = 'done'
-    ORDER BY ran_at DESC
-    LIMIT 1
-  `) as Array<{ ran_at: string | Date }>;
-  const raw = rows[0]?.ran_at;
-  if (!raw) return null;
-  // Neon's serverless driver returns TIMESTAMPTZ as Date — normalise to ISO.
-  return raw instanceof Date ? raw.toISOString() : String(raw);
 }
 
 async function startRun(): Promise<string> {
   const db = sql();
   const rows = (await db`
     INSERT INTO runs (status, stage, stage_detail, stage_updated_at)
-    VALUES ('running', 'planning', 'briefing the agent', NOW())
+    VALUES ('running', 'collecting', 'asking Claude', NOW())
     RETURNING id
   `) as Array<{ id: string }>;
   return rows[0].id;
@@ -88,65 +78,16 @@ async function startRun(): Promise<string> {
 async function setStage(runId: string, stage: string, detail: string): Promise<void> {
   const db = sql();
   await db`
-    UPDATE runs
-    SET stage = ${stage}, stage_detail = ${detail}, stage_updated_at = NOW()
+    UPDATE runs SET stage = ${stage}, stage_detail = ${detail}, stage_updated_at = NOW()
     WHERE id = ${runId}
   `;
   log(`stage: ${stage} — ${detail}`);
 }
 
-// Pricing per million tokens. Update when Anthropic changes prices, or to match
-// whatever model the agent is set to in scripts/setup-agent.ts. The agent there
-// is configured for claude-opus-4-7.
-const OPUS_INPUT_USD_PER_MTOK = 15;
-const OPUS_OUTPUT_USD_PER_MTOK = 75;
-
 function estimateCostUsd(inputTokens: number, outputTokens: number): number {
   return (
-    (inputTokens / 1_000_000) * OPUS_INPUT_USD_PER_MTOK +
-    (outputTokens / 1_000_000) * OPUS_OUTPUT_USD_PER_MTOK
-  );
-}
-
-async function finaliseRun(
-  runId: string,
-  reasoning: string,
-  items: AgentResults['items'],
-  usage: { inputTokens: number; outputTokens: number },
-): Promise<void> {
-  const db = sql();
-  await Promise.all(
-    items.map((it, idx) => db`
-      INSERT INTO items (
-        run_id, type, title, source_name, source_url,
-        thumbnail_url, favicon_char, published_at, why_matters, display_order
-      ) VALUES (
-        ${runId}, ${it.type}, ${it.title}, ${it.source_name}, ${it.source_url},
-        ${it.thumbnail_url ?? null},
-        ${it.type === 'web' ? (it.source_name?.[0] ?? '?').toUpperCase() : null},
-        ${it.published_at ?? null}, ${it.why_matters}, ${idx}
-      )
-    `),
-  );
-
-  const costUsd = estimateCostUsd(usage.inputTokens, usage.outputTokens);
-
-  await db`
-    UPDATE runs
-    SET status = 'done',
-        sources_checked = NULL,
-        items_found = ${items.length},
-        scout_reasoning = ${reasoning},
-        input_tokens = ${usage.inputTokens},
-        output_tokens = ${usage.outputTokens},
-        cost_usd = ${costUsd.toFixed(4)},
-        stage = NULL,
-        stage_detail = NULL,
-        stage_updated_at = NOW()
-    WHERE id = ${runId}
-  `;
-  log(
-    `finalised run ${runId} with ${items.length} items — ${usage.inputTokens} in / ${usage.outputTokens} out, ~$${costUsd.toFixed(4)}`,
+    (inputTokens / 1_000_000) * SONNET_INPUT_USD_PER_MTOK +
+    (outputTokens / 1_000_000) * SONNET_OUTPUT_USD_PER_MTOK
   );
 }
 
@@ -155,8 +96,7 @@ async function markFailed(runId: string | null, message: string): Promise<void> 
     const db = sql();
     if (runId) {
       await db`
-        UPDATE runs
-        SET status = 'failed', error = ${message},
+        UPDATE runs SET status = 'failed', error = ${message},
             stage = NULL, stage_detail = NULL, stage_updated_at = NOW()
         WHERE id = ${runId}
       `;
@@ -168,329 +108,144 @@ async function markFailed(runId: string | null, message: string): Promise<void> 
   }
 }
 
-// ── User message ─────────────────────────────────────────────────────────────
-
-function formatLastRun(value: string | Date | null | undefined): string {
-  if (value == null) return 'never';
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return 'never';
-  return d.toISOString().slice(0, 10);
-}
-
-function buildUserMessage(
-  ratings: Array<{ rating: string; title: string; source_name: string; why_matters: string }>,
-  lastRunIso: string | Date | null,
-): string {
-  const today = new Date().toISOString().slice(0, 10);
-  const lastRun = formatLastRun(lastRunIso);
-
-  const ratingsBlock = ratings.length
-    ? ratings
-        .slice(0, 30)
-        .map(
-          (r) =>
-            `- ${r.rating === 'up' ? '👍' : '👎'} ${r.title} — ${r.source_name} — ${r.why_matters}`,
-        )
-        .join('\n')
-    : 'No ratings yet; this is an early session, lean on memory and your judgement.';
-
-  return `Today is ${today}. Last successful run: ${lastRun}.
-
-Recent ratings from Ben (last 14 days):
-${ratingsBlock}
-
-Run today's session. Consult memory, decide where to look, find the goods, write results to ${RESULTS_PATH}. Update your memory before you finish.`;
-}
-
-// ── Stage mapping from agent events ──────────────────────────────────────────
-
-function describeToolUse(event: any): { stage: string; detail: string } | null {
-  // event.type === 'agent.tool_use' — built-in toolset.
-  const name: string = event.tool_name ?? event.name ?? '';
-  const input = event.input ?? {};
-
-  if (name === 'web_search') {
-    const q = typeof input.query === 'string' ? input.query : '';
-    return { stage: 'collecting', detail: q ? `searching: ${q}` : 'searching the web' };
-  }
-  if (name === 'web_fetch') {
-    const url = typeof input.url === 'string' ? input.url : '';
-    const host = url ? safeHost(url) : '';
-    return { stage: 'collecting', detail: host ? `fetching: ${host}` : 'fetching a page' };
-  }
-  if (name === 'bash') {
-    return { stage: 'collecting', detail: 'running a command' };
-  }
-  if (name === 'read' || name === 'glob' || name === 'grep') {
-    return { stage: 'collecting', detail: 'reading memory' };
-  }
-  if (name === 'write' || name === 'edit') {
-    const path: string = input.path ?? input.file_path ?? '';
-    if (path.endsWith(RESULTS_FILENAME)) {
-      return { stage: 'writing', detail: 'saving findings' };
-    }
-    if (path.startsWith('/mnt/memory/')) {
-      return { stage: 'collecting', detail: 'updating memory' };
-    }
-    return null;
-  }
-  return null;
-}
-
-function safeHost(url: string): string {
-  try {
-    return new URL(url).host.replace(/^www\./, '');
-  } catch {
-    return '';
-  }
-}
-
-// ── Results download ─────────────────────────────────────────────────────────
-
-async function downloadResults(client: Anthropic, sessionId: string): Promise<AgentResults> {
-  // Brief indexing lag between session.status_idle and files appearing in list.
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
-    const files = await client.beta.files.list(
-      { scope_id: sessionId } as any,
-      { headers: { 'anthropic-beta': 'managed-agents-2026-04-01' } } as any,
-    );
-    const data = (files as any).data ?? [];
-    const match = data.find((f: any) => f.filename === RESULTS_FILENAME || f.filename?.endsWith(`/${RESULTS_FILENAME}`));
-    if (match) {
-      const resp = await client.beta.files.download(match.id);
-      const text = await (resp as any).text();
-      return JSON.parse(text) as AgentResults;
-    }
-  }
-  throw new Error(`agent did not write ${RESULTS_PATH}`);
-}
-
-// ── Network-drop detection and session cleanup ───────────────────────────────
-
-function isNetworkError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message ?? '';
-  const name = err.name ?? '';
-  // Also cover undici's typed timeout errors directly — once we lift bodyTimeout
-  // to 10 min, hitting it again is much rarer, but if it happens we still want
-  // to recover rather than fail the run.
-  return (
-    /terminated/i.test(msg) ||
-    /Fetch\.onAborted/i.test(msg) ||
-    /ECONNRESET/i.test(msg) ||
-    /ETIMEDOUT/i.test(msg) ||
-    /socket hang up/i.test(msg) ||
-    /network error/i.test(msg) ||
-    /fetch failed/i.test(msg) ||
-    /undici/i.test(msg) ||
-    name === 'AbortError' ||
-    name === 'BodyTimeoutError' ||
-    name === 'HeadersTimeoutError' ||
-    name === 'ConnectTimeoutError' ||
-    name === 'SocketError'
-  );
-}
-
-// Stop the agent at Anthropic and free the container. Idempotent and best-effort.
-async function endSession(client: Anthropic, sessionId: string): Promise<void> {
-  // 1. Interrupt — brings the agent to a safe-boundary idle so it stops working.
-  try {
-    await client.beta.sessions.events.send(sessionId, {
-      events: [{ type: 'user.interrupt' }],
-    } as any);
-    log(`interrupted session ${sessionId}`);
-  } catch (err) {
-    log(`interrupt failed for session ${sessionId}:`, err);
-  }
-
-  // 2. Wait for non-running before archive (avoids the post-idle status-write race).
-  try {
-    for (let i = 0; i < 10; i++) {
-      const s = await client.beta.sessions.retrieve(sessionId);
-      if (s.status !== 'running') break;
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    await client.beta.sessions.archive(sessionId);
-    log(`archived session ${sessionId}`);
-  } catch (err) {
-    log(`archive failed for session ${sessionId} (non-fatal):`, err);
-  }
-}
-
-async function attachSessionId(runId: string, sessionId: string): Promise<void> {
-  const db = sql();
-  await db`UPDATE runs SET session_id = ${sessionId} WHERE id = ${runId}`;
-}
-
-// ── Main ─────────────────────────────────────────────────────────────────────
-
 async function main() {
-  const agentId = process.env.SCOUT_AGENT_ID;
-  const environmentId = process.env.SCOUT_ENVIRONMENT_ID;
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not set');
-  if (!agentId) throw new Error('SCOUT_AGENT_ID is not set (run scripts/setup-agent.ts first)');
-  if (!environmentId) throw new Error('SCOUT_ENVIRONMENT_ID is not set (run scripts/setup-agent.ts first)');
 
-  const runId = await startRun();
-  let stageNow = 'planning';
-  let sessionId: string | null = null;
-  let sessionCompletedNormally = false;
-  const client = new Anthropic();
+  let runId: string | null = null;
 
   try {
+    runId = await startRun();
+    const client = new Anthropic();
+    const db = sql();
 
-    // Look up the memory_store_id we stashed on the agent at setup time.
-    const agent = await client.beta.agents.retrieve(agentId);
-    const memoryStoreId = (agent.metadata as Record<string, string> | null)?.scout_memory_store_id;
-    if (!memoryStoreId) {
-      throw new Error('agent.metadata.scout_memory_store_id is not set — re-run scripts/setup-agent.ts');
-    }
+    const diaryRows = (await db`
+      SELECT ran_on, summary FROM diary
+      WHERE ran_on > CURRENT_DATE - INTERVAL '14 days'
+      ORDER BY ran_on DESC
+    `) as Array<{ ran_on: string | Date; summary: string }>;
 
-    const [ratings, lastRunDate] = await Promise.all([loadRecentRatings(), loadLastSuccessfulRunDate()]);
+    const diaryBlock = diaryRows.length
+      ? diaryRows.map((r) => `- ${String(r.ran_on).slice(0, 10)}: ${r.summary}`).join('\n')
+      : '';
 
-    const session = await client.beta.sessions.create({
-      agent: { type: 'agent', id: agentId, version: agent.version },
-      environment_id: environmentId,
-      title: `Scout daily run ${new Date().toISOString().slice(0, 10)}`,
-      resources: [
-        {
-          type: 'memory_store',
-          memory_store_id: memoryStoreId,
-          access: 'read_write',
-          instructions:
-            'Your persistent memory across daily Scout runs. Read before deciding where to look today; update before you finish.',
-        } as any,
-      ],
-    });
-    sessionId = session.id;
-    await attachSessionId(runId, sessionId);
-    log(`session ${session.id} (agent ${agentId} v${agent.version})`);
+    const today = new Date().toISOString().slice(0, 10);
+    const userMessage = `Today is ${today}. I want news from the last 48 hours where possible, last 7 days at the outside. Find me 4–8 cycling news items.
 
-    const userMessage = buildUserMessage(ratings, lastRunDate);
+Recently covered (don't repeat):
+${diaryBlock || 'Nothing yet — this is the first run.'}`;
 
-    // Stream-first: open the stream before sending the kickoff.
-    let stream = await client.beta.sessions.events.stream(session.id, undefined, STREAM_REQUEST_OPTIONS);
+    const stream = client.messages.stream({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userMessage }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    } as Parameters<typeof client.messages.stream>[0]);
 
-    await client.beta.sessions.events.send(session.id, {
-      events: [
-        { type: 'user.message', content: [{ type: 'text', text: userMessage }] },
-      ],
-    } as any);
+    // Throttle DB stage writes to ~1/sec so searches don't hammer Neon.
+    let lastWriteAt = 0;
+    const maybeSetStage = (stage: string, detail: string) => {
+      const now = Date.now();
+      if (now - lastWriteAt < 1000) return;
+      lastWriteAt = now;
+      setStage(runId!, stage, detail).catch(() => { /* non-fatal */ });
+    };
 
-    // Single shared retry counter for any recoverable mid-session failure
-    // (session.error rate-limit OR transient network drop). Cap at 3 total.
-    let recoverRetries = 0;
-    const MAX_RECOVER_RETRIES = 3;
-    const RATE_LIMIT_WAIT_MS = 90_000;
-    const NETWORK_WAIT_MS = 30_000;
-    let lastDetail = 'briefing the agent';
+    const searchInputByIdx: Record<number, string> = {};
+    let activeSearchIdx: number | null = null;
 
-    // Accumulated token usage across the run. span.model_request_end events
-    // each carry a model_usage block; sum them as we stream.
-    let inputTokens = 0;
-    let outputTokens = 0;
-
-    streamLoop: while (true) {
-      try {
-        for await (const ev of stream as any) {
-          const t = ev.type as string;
-          log(t);
-
-          if (t === 'agent.tool_use') {
-            const mapped = describeToolUse(ev);
-            if (mapped && (mapped.stage !== stageNow || mapped.detail)) {
-              stageNow = mapped.stage;
-              lastDetail = mapped.detail;
-              await setStage(runId, mapped.stage, mapped.detail);
-            }
-          }
-
-          if (t === 'span.model_request_end' && ev.model_usage) {
-            const u = ev.model_usage;
-            inputTokens += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-            outputTokens += u.output_tokens ?? 0;
-          }
-
-          if (t === 'session.error') {
-            const errMsg: string = ev.error?.message ?? '';
-            const errType: string = ev.error?.type ?? '';
-            const isRateLimit =
-              /rate.?limit/i.test(errMsg) || /rate.?limit/i.test(errType);
-
-            if (isRateLimit && recoverRetries < MAX_RECOVER_RETRIES) {
-              recoverRetries++;
-              log(
-                `hit rate limit, waiting ${RATE_LIMIT_WAIT_MS / 1000}s before resuming (retry ${recoverRetries}/${MAX_RECOVER_RETRIES})`,
-              );
-              await setStage(runId, 'waiting', 'hit rate limit, waiting to resume');
-              await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_MS));
-              await setStage(runId, stageNow, lastDetail);
-              stream = await client.beta.sessions.events.stream(session.id, undefined, STREAM_REQUEST_OPTIONS);
-              continue streamLoop;
-            }
-
-            throw new Error(
-              `session.error: ${errMsg || errType || JSON.stringify(ev.error ?? ev)}`,
-            );
-          }
-
-          if (t === 'session.status_terminated') break streamLoop;
-          if (t === 'session.status_idle') {
-            const stopType = ev.stop_reason?.type;
-            if (stopType === 'requires_action') continue; // we have no custom tools, so this shouldn't happen
-            break streamLoop; // end_turn or retries_exhausted
-          }
+    stream.on('streamEvent', (ev) => {
+      const raw = ev as any;
+      if (raw.type === 'content_block_start') {
+        const block = raw.content_block;
+        if (block?.type === 'server_tool_use' && block?.name === 'web_search') {
+          activeSearchIdx = raw.index;
+          searchInputByIdx[raw.index] = '';
+          maybeSetStage('collecting', 'searching the web');
         }
-        // for-await exited without an explicit break — stream closed cleanly. Done.
-        break streamLoop;
-      } catch (err) {
-        // Network drop: reconnect against the same session — Managed Agents
-        // sessions are stateful, so the agent picks up where it left off.
-        if (isNetworkError(err) && recoverRetries < MAX_RECOVER_RETRIES) {
-          recoverRetries++;
-          log(
-            `network error, waiting ${NETWORK_WAIT_MS / 1000}s before resuming (retry ${recoverRetries}/${MAX_RECOVER_RETRIES}): ${(err as Error).message}`,
-          );
-          await setStage(runId, 'waiting', 'connection dropped, reconnecting');
-          await new Promise((r) => setTimeout(r, NETWORK_WAIT_MS));
-          await setStage(runId, stageNow, lastDetail);
-          stream = await client.beta.sessions.events.stream(session.id, undefined, STREAM_REQUEST_OPTIONS);
-          continue streamLoop;
+      } else if (raw.type === 'input_json_delta' && activeSearchIdx !== null && raw.index === activeSearchIdx) {
+        searchInputByIdx[raw.index] = (searchInputByIdx[raw.index] ?? '') + (raw.delta?.partial_json ?? '');
+      } else if (raw.type === 'content_block_stop' && raw.index === activeSearchIdx) {
+        try {
+          const input = JSON.parse(searchInputByIdx[raw.index] ?? '{}');
+          if (input?.query) maybeSetStage('collecting', `searching: ${input.query}`);
+        } catch {
+          // keep current stage on malformed input
         }
-        throw err;
+        delete searchInputByIdx[raw.index];
+        activeSearchIdx = null;
       }
-    }
-
-    await setStage(runId, 'writing', 'reading the agent\'s findings');
-
-    const results = await downloadResults(client, session.id);
-    log(`agent returned ${results.items?.length ?? 0} items`);
-
-    await finaliseRun(runId, results.reasoning ?? '', results.items ?? [], {
-      inputTokens,
-      outputTokens,
     });
-    sessionCompletedNormally = true;
 
-    // Tidy up the session — agent + environment + memory store all persist.
+    const finalMsg = await stream.finalMessage();
+
+    await setStage(runId, 'writing', 'saving findings');
+
+    // The last text block in the response is the JSON output (tool blocks come before it).
+    const textBlock = [...finalMsg.content].reverse().find((b) => b.type === 'text');
+    if (!textBlock || textBlock.type !== 'text') throw new Error('no text content in response');
+
+    let rawText = textBlock.text.trim();
+    rawText = rawText.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
+
+    let parsed: ParsedResults;
     try {
-      await client.beta.sessions.archive(session.id);
-    } catch (err) {
-      log('session archive failed (non-fatal):', err);
+      parsed = JSON.parse(rawText) as ParsedResults;
+    } catch {
+      throw new Error(`JSON parse failed. Raw response:\n${rawText}`);
     }
+
+    const items = parsed.items ?? [];
+    log(`Claude returned ${items.length} items`);
+
+    await Promise.all(
+      items.map((it, idx) => db`
+        INSERT INTO items (
+          run_id, type, title, source_name, source_url,
+          thumbnail_url, favicon_char, published_at, why_matters, display_order
+        ) VALUES (
+          ${runId}, ${it.type}, ${it.title}, ${it.source_name}, ${it.source_url},
+          ${it.thumbnail_url ?? null},
+          ${it.type === 'web' ? (it.source_name?.[0] ?? '?').toUpperCase() : null},
+          ${it.published_at ?? null}, ${it.why_matters}, ${idx}
+        )
+      `),
+    );
+
+    if (parsed.diary_summary) {
+      await db`
+        INSERT INTO diary (ran_on, summary)
+        VALUES (CURRENT_DATE, ${parsed.diary_summary})
+        ON CONFLICT (ran_on) DO UPDATE SET summary = EXCLUDED.summary, created_at = NOW()
+      `;
+    }
+
+    const usage = finalMsg.usage;
+    const inputTokens =
+      (usage.input_tokens ?? 0) +
+      ((usage as any).cache_creation_input_tokens ?? 0) +
+      ((usage as any).cache_read_input_tokens ?? 0);
+    const outputTokens = usage.output_tokens ?? 0;
+    const costUsd = estimateCostUsd(inputTokens, outputTokens);
+
+    await db`
+      UPDATE runs
+      SET status = 'done',
+          items_found = ${items.length},
+          input_tokens = ${inputTokens},
+          output_tokens = ${outputTokens},
+          cost_usd = ${costUsd.toFixed(4)},
+          stage = NULL,
+          stage_detail = NULL,
+          stage_updated_at = NOW()
+      WHERE id = ${runId}
+    `;
+    log(`done — ${items.length} items, ${inputTokens} in / ${outputTokens} out, ~$${costUsd.toFixed(4)}`);
   } catch (err) {
     const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
     log('FAILED:', msg);
     await markFailed(runId, msg);
     process.exitCode = 1;
-  } finally {
-    // If we exited abnormally with an active session, end it so the agent
-    // doesn't keep working (and burning tokens) until its own internal limits
-    // expire.
-    if (sessionId && !sessionCompletedNormally) {
-      await endSession(client, sessionId);
-    }
   }
 }
 
