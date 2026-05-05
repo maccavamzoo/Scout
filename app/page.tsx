@@ -9,7 +9,7 @@ async function getLatest(): Promise<LatestResponse> {
   const db = sql();
 
   const runs = (await db`
-    SELECT id, ran_at, status, sources_checked, items_found, error,
+    SELECT id, ran_at, status, items_found, error,
            stage, stage_detail, input_tokens, output_tokens, cost_usd
     FROM runs
     ORDER BY ran_at DESC
@@ -20,7 +20,6 @@ async function getLatest(): Promise<LatestResponse> {
       | 'id'
       | 'ran_at'
       | 'status'
-      | 'sources_checked'
       | 'items_found'
       | 'error'
       | 'stage'
@@ -38,7 +37,6 @@ async function getLatest(): Promise<LatestResponse> {
       stage_detail: null,
       ran_at: new Date().toISOString(),
       error: null,
-      sources_checked: 0,
       items_found: 0,
       input_tokens: null,
       output_tokens: null,
@@ -82,7 +80,6 @@ async function getLatest(): Promise<LatestResponse> {
     stage_detail: run.stage_detail,
     ran_at: run.ran_at,
     error: run.error,
-    sources_checked: run.sources_checked,
     items_found: run.items_found,
     input_tokens: run.input_tokens,
     output_tokens: run.output_tokens,

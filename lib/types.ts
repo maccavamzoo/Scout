@@ -5,9 +5,7 @@ export interface RunRow {
   id: string;
   ran_at: string;
   status: 'pending' | 'running' | 'done' | 'failed';
-  sources_checked: number | null;
   items_found: number | null;
-  scout_reasoning: string | null;
   error: string | null;
   stage: string | null;
   stage_detail: string | null;
@@ -15,7 +13,6 @@ export interface RunRow {
   input_tokens: number | null;
   output_tokens: number | null;
   cost_usd: number | null;
-  session_id: string | null;
 }
 
 export interface ItemRow {
@@ -52,7 +49,6 @@ export interface LatestResponse {
   stage_detail: string | null;
   ran_at: string;
   error: string | null;
-  sources_checked: number | null;
   items_found: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -64,18 +60,4 @@ export interface BalanceResponse {
   // dollars; null = couldn't determine (no key, endpoint failed, etc.)
   balance_usd: number | null;
   source?: string;
-}
-
-// What the agent writes to /mnt/session/outputs/results.json.
-export interface AgentResults {
-  reasoning: string;
-  items: Array<{
-    type: ItemType;
-    title: string;
-    source_name: string;
-    source_url: string;
-    thumbnail_url?: string | null;
-    published_at?: string | null;
-    why_matters: string;
-  }>;
 }

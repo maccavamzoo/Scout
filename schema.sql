@@ -4,10 +4,14 @@ CREATE TABLE runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   ran_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   status TEXT NOT NULL CHECK (status IN ('pending','running','done','failed')),
-  sources_checked INT,
   items_found INT,
-  scout_reasoning TEXT,
-  error TEXT
+  error TEXT,
+  stage TEXT,
+  stage_detail TEXT,
+  stage_updated_at TIMESTAMPTZ,
+  input_tokens INT,
+  output_tokens INT,
+  cost_usd NUMERIC(10, 4)
 );
 
 CREATE TABLE items (
@@ -25,25 +29,6 @@ CREATE TABLE items (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE scout_memory (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  source TEXT NOT NULL,
-  last_checked TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  notes TEXT
-);
-
-CREATE INDEX idx_items_run ON items(run_id);
-CREATE INDEX idx_runs_ran_at ON runs(ran_at DESC);
-CREATE INDEX idx_runs_status ON runs(status);
-CREATE INDEX idx_memory_source ON scout_memory(source);
-CREATE INDEX idx_memory_checked ON scout_memory(last_checked DESC);
-
--- ── Patch 03: live progress ──────────────────────────────────────────────────
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage TEXT;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage_detail TEXT;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage_updated_at TIMESTAMPTZ;
-
--- ── v2: ratings (one rating per item, latest click wins) ─────────────────────
 CREATE TABLE ratings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
@@ -51,13 +36,35 @@ CREATE TABLE ratings (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE diary (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ran_on DATE NOT NULL UNIQUE,
+  summary TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_items_run ON items(run_id);
+CREATE INDEX idx_runs_ran_at ON runs(ran_at DESC);
+CREATE INDEX idx_runs_status ON runs(status);
 CREATE UNIQUE INDEX idx_ratings_item ON ratings(item_id);
 CREATE INDEX idx_ratings_created ON ratings(created_at DESC);
+CREATE INDEX idx_diary_ran_on ON diary(ran_on DESC);
 
--- ── v2 patch: per-run token usage + estimated cost ───────────────────────────
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS input_tokens INT;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS output_tokens INT;
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(10, 4);
 
--- ── v2 patch: track agent session id so /api/run can clean up stale runs ─────
-ALTER TABLE runs ADD COLUMN IF NOT EXISTS session_id TEXT;
+-- ── Migration from v2 → v3 (run once manually in Neon) ──────────────────────
+-- Skip if you're starting from a fresh database.
+--
+-- DROP TABLE IF EXISTS scout_memory;
+-- ALTER TABLE runs DROP COLUMN IF EXISTS session_id;
+-- ALTER TABLE runs DROP COLUMN IF EXISTS sources_checked;
+-- ALTER TABLE runs DROP COLUMN IF EXISTS scout_reasoning;
+-- DROP INDEX IF EXISTS idx_memory_source;
+-- DROP INDEX IF EXISTS idx_memory_checked;
+--
+-- CREATE TABLE diary (
+--   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+--   ran_on DATE NOT NULL UNIQUE,
+--   summary TEXT NOT NULL,
+--   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- );
+-- CREATE INDEX idx_diary_ran_on ON diary(ran_on DESC);

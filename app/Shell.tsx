@@ -215,7 +215,7 @@ function WebCard({
   );
 }
 
-function EmptyState({ sourcesChecked }: { sourcesChecked: number }) {
+function EmptyState() {
   return (
     <div className="empty-state">
       <svg className="empty-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
@@ -224,11 +224,7 @@ function EmptyState({ sourcesChecked }: { sourcesChecked: number }) {
         <path d="M20 20m-3 0a3 3 0 1 0 6 0 3 3 0 0 0-6 0" opacity="0.3" />
       </svg>
       <h2>Nothing worth your time today.</h2>
-      <p>
-        Scout looked but nothing cleared the bar
-        {sourcesChecked > 0 ? ` (across ${sourcesChecked} source${sourcesChecked === 1 ? '' : 's'})` : ''}
-        .
-      </p>
+      <p>Scout looked but nothing cleared the bar.</p>
     </div>
   );
 }
@@ -461,7 +457,7 @@ export function Shell({ initial }: { initial: LatestResponse }) {
       ) : data.status === 'running' || data.status === 'pending' ? (
         <RunningBanner stage={data.stage} detail={data.stage_detail} />
       ) : data.items.length === 0 ? (
-        <EmptyState sourcesChecked={data.sources_checked ?? 0} />
+        <EmptyState />
       ) : (
         <div className="card-list">
           {data.items.map((item) =>
