@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BalanceResponse, LatestItem, LatestResponse, Rating } from '@/lib/types';
 
 const LOW_BALANCE_USD = 2;
@@ -276,6 +276,9 @@ export function Shell({ initial }: { initial: LatestResponse }) {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
+  // Timestamp (ms) of the last "Run now" click — used to ignore stale API
+  // responses while waiting for the new GitHub Actions run to appear in the DB.
+  const triggeredAtRef = useRef<number | null>(null);
 
   const fetchBalance = useCallback(async () => {
     try {
@@ -312,11 +315,22 @@ export function Shell({ initial }: { initial: LatestResponse }) {
       try {
         const fresh = (await fetch('/api/latest', { cache: 'no-store' }).then((r) => r.json())) as LatestResponse;
         setData((prev) => {
+          // If we triggered a new run, ignore API responses that belong to the
+          // previous run — the new workflow row hasn't been inserted yet.
+          if (
+            triggeredAtRef.current != null &&
+            (fresh.status === 'done' || fresh.status === 'failed') &&
+            fresh.ran_at &&
+            Date.parse(fresh.ran_at) < triggeredAtRef.current
+          ) {
+            return prev;
+          }
           // When the run flips to a terminal state, refresh balance.
           if (
             (fresh.status === 'done' || fresh.status === 'failed') &&
             prev.status !== fresh.status
           ) {
+            triggeredAtRef.current = null;
             fetchBalance();
           }
           return fresh;
@@ -330,6 +344,7 @@ export function Shell({ initial }: { initial: LatestResponse }) {
 
   const runNow = useCallback(async () => {
     if (running) return;
+    triggeredAtRef.current = Date.now();
     setRunning(true);
     setMessage(null);
     setData((prev) => ({
