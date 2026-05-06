@@ -2,6 +2,7 @@ name: Scout
 on:
    schedule:
      - cron: '32 10 * * *'
+     
   workflow_dispatch:
 
 jobs:
