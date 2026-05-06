@@ -3,7 +3,7 @@ on:
    schedule:
      - cron: '32 10 * * *'
      
-  workflow_dispatch:
+   workflow_dispatch:
 
 jobs:
   scout:
