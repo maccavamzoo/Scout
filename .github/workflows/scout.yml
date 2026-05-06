@@ -1,7 +1,6 @@
 name: Scout
 on:
    schedule:
-   # - cron: '0 6 * * *'    # 06:00 UTC daily
      - cron: '32 10 * * *'
   workflow_dispatch:
 
