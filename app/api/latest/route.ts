@@ -5,43 +5,48 @@ import type { LatestResponse, RunRow, ItemType, Rating } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function GET() {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const date = searchParams.get('date'); // YYYY-MM-DD or null
+
   const db = sql();
 
-  const runs = (await db`
-    SELECT id, ran_at, status, items_found, error,
-           stage, stage_detail, input_tokens, output_tokens, cost_usd
+  const earliestRows = (await db`
+    SELECT TO_CHAR(MIN(ran_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS earliest
     FROM runs
-    ORDER BY ran_at DESC
-    LIMIT 1
-  `) as Array<
-    Pick<
-      RunRow,
-      | 'id'
-      | 'ran_at'
-      | 'status'
-      | 'items_found'
-      | 'error'
-      | 'stage'
-      | 'stage_detail'
-      | 'input_tokens'
-      | 'output_tokens'
-      | 'cost_usd'
-    >
-  >;
+  `) as Array<{ earliest: string | null }>;
+  const earliest_run_date = earliestRows[0]?.earliest ?? null;
+
+  const runs = date
+    ? ((await db`
+        SELECT id, ran_at, status, items_found, error,
+               stage, stage_detail, input_tokens, output_tokens, cost_usd
+        FROM runs
+        WHERE DATE(ran_at AT TIME ZONE 'UTC') = ${date}::date
+        ORDER BY ran_at DESC
+        LIMIT 1
+      `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'items_found' | 'error' | 'stage' | 'stage_detail' | 'input_tokens' | 'output_tokens' | 'cost_usd'>>)
+    : ((await db`
+        SELECT id, ran_at, status, items_found, error,
+               stage, stage_detail, input_tokens, output_tokens, cost_usd
+        FROM runs
+        ORDER BY ran_at DESC
+        LIMIT 1
+      `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'items_found' | 'error' | 'stage' | 'stage_detail' | 'input_tokens' | 'output_tokens' | 'cost_usd'>>);
 
   if (runs.length === 0) {
     const empty: LatestResponse = {
       status: 'done',
       stage: null,
       stage_detail: null,
-      ran_at: new Date().toISOString(),
+      ran_at: date ? null : new Date().toISOString(),
       error: null,
       items_found: 0,
       input_tokens: null,
       output_tokens: null,
       cost_usd: null,
       items: [],
+      earliest_run_date,
     };
     return NextResponse.json(empty);
   }
@@ -71,7 +76,6 @@ export async function GET() {
         }>)
       : [];
 
-  // Neon's NUMERIC columns come back as strings — coerce.
   const rawCost = run.cost_usd as unknown;
   const cost_usd =
     rawCost == null ? null : typeof rawCost === 'number' ? rawCost : Number(rawCost);
@@ -87,6 +91,7 @@ export async function GET() {
     output_tokens: run.output_tokens,
     cost_usd,
     items,
+    earliest_run_date,
   };
 
   return NextResponse.json(body);

@@ -1,13 +1,5 @@
 # Scout
 
-> ## 🚧 ACTIVE TASK
->
-> **Read [`SCOUT_ARCHIVE_PROMPT.md`](./SCOUT_ARCHIVE_PROMPT.md) in the repo root before doing anything else.** That file is the current job — adding past-day navigation to the Scout page with back/forward arrows. Do everything in it, including removing this banner at the end.
->
-> The text below describes the current state of the codebase (post-v3). Use it for reference while you read the repo.
-
----
-
 A personal cycling-news agent for Ben (Bikotic).
 
 ## Project overview

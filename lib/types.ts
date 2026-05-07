@@ -47,13 +47,14 @@ export interface LatestResponse {
   status: 'done' | 'failed' | 'running' | 'pending';
   stage: string | null;
   stage_detail: string | null;
-  ran_at: string;
+  ran_at: string | null;
   error: string | null;
   items_found: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
   cost_usd: number | null;
   items: LatestItem[];
+  earliest_run_date: string | null;
 }
 
 export interface BalanceResponse {
