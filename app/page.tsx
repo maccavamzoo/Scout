@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { sql } from '@/lib/db';
 import type { ItemType, LatestItem, LatestResponse, Rating, RunRow } from '@/lib/types';
 import { Shell } from './Shell';
@@ -5,43 +6,49 @@ import { Shell } from './Shell';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-async function getLatest(): Promise<LatestResponse> {
+function todayUTC(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function getLatest(date?: string): Promise<LatestResponse> {
   const db = sql();
 
-  const runs = (await db`
-    SELECT id, ran_at, status, items_found, error,
-           stage, stage_detail, input_tokens, output_tokens, cost_usd
+  const earliestRows = (await db`
+    SELECT TO_CHAR(MIN(ran_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS earliest
     FROM runs
-    ORDER BY ran_at DESC
-    LIMIT 1
-  `) as Array<
-    Pick<
-      RunRow,
-      | 'id'
-      | 'ran_at'
-      | 'status'
-      | 'items_found'
-      | 'error'
-      | 'stage'
-      | 'stage_detail'
-      | 'input_tokens'
-      | 'output_tokens'
-      | 'cost_usd'
-    >
-  >;
+  `) as Array<{ earliest: string | null }>;
+  const earliest_run_date = earliestRows[0]?.earliest ?? null;
+
+  const runs = date
+    ? ((await db`
+        SELECT id, ran_at, status, items_found, error,
+               stage, stage_detail, input_tokens, output_tokens, cost_usd
+        FROM runs
+        WHERE DATE(ran_at AT TIME ZONE 'UTC') = ${date}::date
+        ORDER BY ran_at DESC
+        LIMIT 1
+      `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'items_found' | 'error' | 'stage' | 'stage_detail' | 'input_tokens' | 'output_tokens' | 'cost_usd'>>)
+    : ((await db`
+        SELECT id, ran_at, status, items_found, error,
+               stage, stage_detail, input_tokens, output_tokens, cost_usd
+        FROM runs
+        ORDER BY ran_at DESC
+        LIMIT 1
+      `) as Array<Pick<RunRow, 'id' | 'ran_at' | 'status' | 'items_found' | 'error' | 'stage' | 'stage_detail' | 'input_tokens' | 'output_tokens' | 'cost_usd'>>);
 
   if (runs.length === 0) {
     return {
       status: 'done',
       stage: null,
       stage_detail: null,
-      ran_at: new Date().toISOString(),
+      ran_at: date ? null : new Date().toISOString(),
       error: null,
       items_found: 0,
       input_tokens: null,
       output_tokens: null,
       cost_usd: null,
       items: [],
+      earliest_run_date,
     };
   }
 
@@ -69,7 +76,6 @@ async function getLatest(): Promise<LatestResponse> {
         }>)
       : [];
 
-  // Neon's NUMERIC columns come back as strings — coerce.
   const rawCost = run.cost_usd as unknown;
   const cost_usd =
     rawCost == null ? null : typeof rawCost === 'number' ? rawCost : Number(rawCost);
@@ -85,10 +91,25 @@ async function getLatest(): Promise<LatestResponse> {
     output_tokens: run.output_tokens,
     cost_usd,
     items,
+    earliest_run_date,
   };
 }
 
-export default async function Page() {
-  const data = await getLatest();
-  return <Shell initial={data} />;
+export default async function Page({ searchParams }: { searchParams: { date?: string } }) {
+  const dateParam = searchParams.date;
+  const today = todayUTC();
+
+  if (dateParam !== undefined) {
+    const isValidFormat = /^\d{4}-\d{2}-\d{2}$/.test(dateParam);
+    const isValidDate = isValidFormat && !isNaN(new Date(`${dateParam}T00:00:00Z`).getTime());
+    if (!isValidDate || dateParam >= today) {
+      redirect('/');
+    }
+  }
+
+  const data = await getLatest(dateParam);
+  const isLive = dateParam === undefined;
+  const viewDate = dateParam ?? null;
+
+  return <Shell initial={data} viewDate={viewDate} isLive={isLive} />;
 }

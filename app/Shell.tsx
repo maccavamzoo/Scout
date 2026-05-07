@@ -80,6 +80,22 @@ function stageLine(stage: string | null, detail: string | null): string {
   }
 }
 
+function shiftDateUTC(yyyymmdd: string, deltaDays: number): string {
+  const d = new Date(`${yyyymmdd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
+}
+
+function todayUTC(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatArchiveDate(yyyymmdd: string): string {
+  return new Date(`${yyyymmdd}T00:00:00Z`).toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  });
+}
+
 function LinkOut({ href }: { href: string }) {
   return (
     <a href={href} className="card-link" title="Open source" target="_blank" rel="noopener noreferrer">
@@ -91,7 +107,6 @@ function LinkOut({ href }: { href: string }) {
 }
 
 function ThumbsIcon({ down, filled }: { down?: boolean; filled?: boolean }) {
-  // Simple thumbs-up SVG; flipped vertically for thumbs-down.
   const path =
     'M3 8.5h2v6H3a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1Zm4 0V5.7c0-.9.7-1.7 1.7-1.7.4 0 .7.3.7.7l-.4 2.3v1.5h3.7c.7 0 1.3.6 1.3 1.3l-.9 4c-.1.5-.6.9-1.2.9H7v-6Z';
   return (
@@ -269,15 +284,21 @@ function RunningBanner({ stage, detail }: { stage: string | null; detail: string
   );
 }
 
-export function Shell({ initial }: { initial: LatestResponse }) {
+export function Shell({
+  initial,
+  viewDate,
+  isLive,
+}: {
+  initial: LatestResponse;
+  viewDate: string | null;
+  isLive: boolean;
+}) {
   const [data, setData] = useState<LatestResponse>(initial);
   const [date, setDate] = useState('');
   const [lastScanned, setLastScanned] = useState('');
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
-  // Timestamp (ms) of the last "Run now" click — used to ignore stale API
-  // responses while waiting for the new GitHub Actions run to appear in the DB.
   const triggeredAtRef = useRef<number | null>(null);
 
   const fetchBalance = useCallback(async () => {
@@ -294,6 +315,7 @@ export function Shell({ initial }: { initial: LatestResponse }) {
   }, [fetchBalance]);
 
   useEffect(() => {
+    if (!isLive) return;
     setDate(
       new Date().toLocaleDateString('en-US', {
         weekday: 'long',
@@ -302,21 +324,20 @@ export function Shell({ initial }: { initial: LatestResponse }) {
         day: 'numeric',
       }),
     );
-  }, []);
+  }, [isLive]);
 
   useEffect(() => {
     if (data.ran_at) setLastScanned(formatLastScanned(data.ran_at));
   }, [data.ran_at]);
 
-  // Poll while running/pending.
+  // Poll while running/pending — live view only.
   useEffect(() => {
+    if (!isLive) return;
     if (data.status !== 'running' && data.status !== 'pending') return;
     const interval = setInterval(async () => {
       try {
         const fresh = (await fetch('/api/latest', { cache: 'no-store' }).then((r) => r.json())) as LatestResponse;
         setData((prev) => {
-          // If we triggered a new run, ignore API responses that belong to the
-          // previous run — the new workflow row hasn't been inserted yet.
           if (
             triggeredAtRef.current != null &&
             (fresh.status === 'done' || fresh.status === 'failed') &&
@@ -325,7 +346,6 @@ export function Shell({ initial }: { initial: LatestResponse }) {
           ) {
             return prev;
           }
-          // When the run flips to a terminal state, refresh balance.
           if (
             (fresh.status === 'done' || fresh.status === 'failed') &&
             prev.status !== fresh.status
@@ -340,7 +360,7 @@ export function Shell({ initial }: { initial: LatestResponse }) {
       }
     }, 4000);
     return () => clearInterval(interval);
-  }, [data.status, fetchBalance]);
+  }, [data.status, fetchBalance, isLive]);
 
   const runNow = useCallback(async () => {
     if (running) return;
@@ -377,7 +397,6 @@ export function Shell({ initial }: { initial: LatestResponse }) {
   }, [running, fetchBalance]);
 
   const rateItem = useCallback((itemId: string, rating: Rating) => {
-    // Optimistic — flip the UI immediately, then POST.
     setData((prev) => ({
       ...prev,
       items: prev.items.map((it) => (it.id === itemId ? { ...it, rating } : it)),
@@ -386,75 +405,122 @@ export function Shell({ initial }: { initial: LatestResponse }) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ item_id: itemId, rating }),
-    }).catch(() => {
-      // Network failure — silently ignore. Page reload will reconcile.
-    });
+    }).catch(() => {});
   }, []);
 
-  const showSummary = data.status === 'done' && data.items.length > 0;
+  const showSummary = isLive && data.status === 'done' && data.items.length > 0;
 
   const showRunUsage =
+    isLive &&
     data.status === 'done' &&
     data.cost_usd != null &&
     data.input_tokens != null &&
     data.output_tokens != null;
   const totalTokens = (data.input_tokens ?? 0) + (data.output_tokens ?? 0);
 
-  const showBalance = balance != null;
+  const showBalance = isLive && balance != null;
   const lowBalance = balance != null && balance < LOW_BALANCE_USD;
+
+  // Navigation
+  const backDisabled = isLive
+    ? data.earliest_run_date === null
+    : viewDate === data.earliest_run_date || data.earliest_run_date === null;
+
+  const handleBack = () => {
+    const fromDate = isLive ? todayUTC() : viewDate!;
+    window.location.href = `/?date=${shiftDateUTC(fromDate, -1)}`;
+  };
+
+  const handleForward = () => {
+    if (!viewDate) return;
+    const next = shiftDateUTC(viewDate, 1);
+    window.location.href = next === todayUTC() ? '/' : `/?date=${next}`;
+  };
+
+  // Content to render below the header
+  const isEmptyDay = !isLive && data.ran_at === null;
 
   return (
     <main className="page">
-      <header className="header">
-        <div className="header-left">
-          <h1 className="greeting">Morning, Ben.</h1>
-          <p className="date-line">{date}</p>
-          {lastScanned && <p className="last-scanned">{lastScanned}</p>}
-          {showRunUsage && (
-            <p className="last-scanned">
-              This run: {formatTokens(totalTokens)} tokens · {formatCost(data.cost_usd!)}
-            </p>
-          )}
-          {showBalance && !lowBalance && (
-            <p className="last-scanned">Credits remaining: {formatBalance(balance!)}</p>
-          )}
-          {showBalance && lowBalance && (
-            <p className="last-scanned credits-low">
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path
-                  d="M8 1.5L15 14H1L8 1.5Z M8 6V10 M8 11.5V12.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              Credits low: {formatBalance(balance!)} —{' '}
-              <a href={CONSOLE_URL} target="_blank" rel="noopener noreferrer">
-                top up at console.anthropic.com
-              </a>
-            </p>
-          )}
-        </div>
-        <div className={`header-actions${running ? ' running' : ''}`}>
-          <button className="btn-run" type="button" onClick={runNow}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="1.5 4.5 1.5 1.5 4.5 1.5" />
-              <path d="M1.5 4.5A6.5 6.5 0 1 1 3.4 10" />
-            </svg>
-            Run now
-          </button>
-          <button className="btn-cog" type="button" title="Settings (coming soon)">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="8" cy="8" r="2.5" />
-              <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M2.93 2.93l1.06 1.06M12.01 12.01l1.06 1.06M2.93 13.07l1.06-1.06M12.01 3.99l1.06-1.06" />
-            </svg>
-          </button>
-        </div>
-      </header>
+      {isLive ? (
+        <>
+          <header className="header">
+            <div className="header-left">
+              <h1 className="greeting">Morning, Ben.</h1>
+              <p className="date-line">{date}</p>
+              {lastScanned && <p className="last-scanned">{lastScanned}</p>}
+              {showRunUsage && (
+                <p className="last-scanned">
+                  This run: {formatTokens(totalTokens)} tokens · {formatCost(data.cost_usd!)}
+                </p>
+              )}
+              {showBalance && !lowBalance && (
+                <p className="last-scanned">Credits remaining: {formatBalance(balance!)}</p>
+              )}
+              {showBalance && lowBalance && (
+                <p className="last-scanned credits-low">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path
+                      d="M8 1.5L15 14H1L8 1.5Z M8 6V10 M8 11.5V12.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Credits low: {formatBalance(balance!)} —{' '}
+                  <a href={CONSOLE_URL} target="_blank" rel="noopener noreferrer">
+                    top up at console.anthropic.com
+                  </a>
+                </p>
+              )}
+            </div>
+            <div className={`header-actions${running ? ' running' : ''}`}>
+              <button className="btn-run" type="button" onClick={runNow}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="1.5 4.5 1.5 1.5 4.5 1.5" />
+                  <path d="M1.5 4.5A6.5 6.5 0 1 1 3.4 10" />
+                </svg>
+                Run now
+              </button>
+              <button className="btn-cog" type="button" title="Settings (coming soon)">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="8" cy="8" r="2.5" />
+                  <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M2.93 2.93l1.06 1.06M12.01 12.01l1.06 1.06M2.93 13.07l1.06-1.06M12.01 3.99l1.06-1.06" />
+                </svg>
+              </button>
+            </div>
+          </header>
+          <div className="day-nav day-nav--live">
+            <button
+              type="button"
+              disabled={backDisabled}
+              onClick={handleBack}
+              aria-label="Previous day"
+            >←</button>
+          </div>
+        </>
+      ) : (
+        <header className="archive-header">
+          <h1 className="date-header">{formatArchiveDate(viewDate!)}</h1>
+          <div className="day-nav">
+            <button
+              type="button"
+              disabled={backDisabled}
+              onClick={handleBack}
+              aria-label="Previous day"
+            >←</button>
+            <button
+              type="button"
+              onClick={handleForward}
+              aria-label="Next day"
+            >→</button>
+          </div>
+        </header>
+      )}
 
-      {message && (
+      {isLive && message && (
         <p className="summary" role="status">{message}</p>
       )}
 
@@ -467,10 +533,12 @@ export function Shell({ initial }: { initial: LatestResponse }) {
 
       <div className="divider" />
 
-      {data.status === 'failed' ? (
-        <FailureBanner error={data.error} ranAt={data.ran_at} balanceUsd={balance} />
+      {isEmptyDay ? (
+        <div className="empty-day">No run on this day.</div>
+      ) : data.status === 'failed' ? (
+        <FailureBanner error={data.error} ranAt={data.ran_at!} balanceUsd={balance} />
       ) : data.status === 'running' || data.status === 'pending' ? (
-        <RunningBanner stage={data.stage} detail={data.stage_detail} />
+        isLive ? <RunningBanner stage={data.stage} detail={data.stage_detail} /> : null
       ) : data.items.length === 0 ? (
         <EmptyState />
       ) : (
