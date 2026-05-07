@@ -23,7 +23,7 @@ E-bikes (unless mainstream crossover), commuter/utility, lifestyle content, pure
 
 # How to research
 
-Decide for yourself where to look. No fixed list — use whatever cycling press, manufacturer sites, race coverage, or YouTube content you can reach via web search. Try multiple angles. Verify URLs before you cite them.
+Decide for yourself where to look. No fixed list — use whatever cycling press, manufacturer sites, race coverage, forums, or YouTube content you can reach via web search. Try multiple angles. Verify URLs before you cite them.
 
 # Output
 
